@@ -860,7 +860,7 @@ function buildCoverMetrics(
       label: "Payback on the pilot build",
     },
     {
-      value: deliverableSystemLabel(draft.actualDeliverables),
+      value: deliverableSystemLabel(),
       label: "One place for trusted answers",
     },
   ];
@@ -1095,19 +1095,22 @@ function optionalParagraph(value: string | undefined, className: string): string
 function preparedForLabel(draft: ProposalDraft): string {
   const buyerName = draft.preparedFor.buyerName;
   if (buyerName === undefined) return draft.preparedFor.companyName;
-  return `${buyerName} and the ${clientShortName(draft)} Team`;
+  return `${buyerName} and the ${clientTitleName(draft)} Team`;
 }
 
 function clientShortName(draft: ProposalDraft): string {
   const logoText = draft.preparedFor.logoText;
   if (logoText !== undefined) return logoText;
+  return clientTitleName(draft);
+}
+
+function clientTitleName(draft: ProposalDraft): string {
   const [firstWord] = draft.preparedFor.companyName.split(" ");
   return firstWord ?? draft.preparedFor.companyName;
 }
 
 function buildPlanHeading(draft: ProposalDraft): string {
-  const shortName = clientShortName(draft);
-  return `${shortName}'s own system is built on real operating data.`;
+  return `${clientTitleName(draft)}'s own system is built on real operating data.`;
 }
 
 function investmentHeading(draft: ProposalDraft): string {
@@ -1136,9 +1139,8 @@ function formatCoverHeadline(headline: string): string {
   return `${escaped.slice(0, markerIndex)}<span class="accent">${escaped.slice(markerIndex)}</span>`;
 }
 
-function deliverableSystemLabel(deliverables: readonly ProposalActualDeliverable[]): string {
-  if (deliverables.length <= 1) return "1 system";
-  return `${deliverables.length.toLocaleString("en-US")} deliverables`;
+function deliverableSystemLabel(): string {
+  return "1 system";
 }
 
 function formatPhasePrice(price: number | null): string {

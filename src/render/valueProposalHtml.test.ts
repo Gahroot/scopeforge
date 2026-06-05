@@ -41,6 +41,9 @@ describe("renderValueProposalHtml", () => {
     expect(html).toContain("An AI Operating System That Pays for Itself in About 5 Months");
     expect(html).toContain("$150K–180K");
     expect(html).toContain("~2 mo");
+    expect(html).toContain("1 system");
+    expect(html).toContain("Brent Ozenbaugh and the Triten Team");
+    expect(html).toContain("Triten&#39;s own system is built on real operating data.");
     expect(html).toContain("01 What this unlocks for TRITEN");
     expect(html).toContain("Where recovered value comes from");
     expect(html).toContain("Team capacity returned to higher-value work");
