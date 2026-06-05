@@ -1,0 +1,59 @@
+export type {
+  InternalProposalAppendix,
+  PreparedFor,
+  ProposalActualDeliverable,
+  ProposalAudience,
+  ProposalBrand,
+  ProposalBrandColors,
+  ProposalBuildPlanStep,
+  ProposalDetails,
+  ProposalDraft,
+  ProposalDraftMetadata,
+  ProposalDraftPricing,
+  ProposalDraftStatus,
+  ProposalDraftTemplateId,
+  ProposalDraftValueProposal,
+  ProposalEconomicsView,
+  ProposalFooter,
+  ProposalIntake,
+  ProposalMilestone,
+  ProposalPhaseDiscount,
+  ProposalPricingPhase,
+  ProposalRenderOptions,
+  ProposalScopeItem,
+  ProposalTerms,
+  ProposalValidationError,
+  ProposalValueSourceConfidence,
+  ProposalValueSourceRow,
+  ProposalViewModel,
+  ValidationResult,
+} from "./types.js";
+export {
+  BUILT_IN_BRAND_IDS,
+  BUILT_IN_BRANDS,
+  getBuiltInBrands,
+  isBuiltInBrandId,
+  resolveBrand,
+  validateProposalBrand,
+} from "./brands.js";
+export type { BuiltInBrandId } from "./brands.js";
+export {
+  formatMoney,
+  formatMoneyRange,
+  formatMonths,
+  formatNumber,
+  formatPercent,
+  formatProposalDate,
+  formatTriEstimateRange,
+} from "./format.js";
+export {
+  buildProposalViewModel,
+  getClientBlockingWarnings,
+  hasClientBlockingWarnings,
+} from "./model.js";
+export {
+  PROPOSAL_DRAFT_TEMPLATE_IDS,
+  proposalDraftToIntake,
+  validateProposalDraft,
+  validateProposalIntake,
+} from "./schema.js";
