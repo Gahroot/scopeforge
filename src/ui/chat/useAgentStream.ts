@@ -1,0 +1,247 @@
+import { useCallback, useRef, useState } from "react";
+import type { AgentMessageRequest, AgentStreamFrame, SessionSnapshot } from "../lib/types.js";
+
+export type AgentStatus = "idle" | "thinking" | "streaming" | "tool";
+
+export interface ToolActivityItem {
+  readonly toolCallId: string;
+  readonly name: string;
+  readonly label: string;
+  summary?: string;
+  done: boolean;
+  isError: boolean;
+}
+
+export interface ChatMessage {
+  readonly id: string;
+  readonly role: "user" | "assistant";
+  text: string;
+  thinking?: string;
+  tools: ToolActivityItem[];
+  streaming?: boolean;
+  error?: string;
+}
+
+export interface AgentStreamApi {
+  readonly messages: readonly ChatMessage[];
+  readonly status: AgentStatus;
+  readonly snapshot: SessionSnapshot | null;
+  readonly error: string | null;
+  send(message: string, options?: Pick<AgentMessageRequest, "brandId" | "audience">): Promise<void>;
+  stop(): void;
+}
+
+function makeId(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+export function useAgentStream(): AgentStreamApi {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [status, setStatus] = useState<AgentStatus>("idle");
+  const [snapshot, setSnapshot] = useState<SessionSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const patchAssistant = useCallback((id: string, update: (message: ChatMessage) => void): void => {
+    setMessages((prev) =>
+      prev.map((message) => {
+        if (message.id !== id) return message;
+        const next = { ...message, tools: [...message.tools] };
+        update(next);
+        return next;
+      }),
+    );
+  }, []);
+
+  const send = useCallback(
+    async (
+      text: string,
+      options?: Pick<AgentMessageRequest, "brandId" | "audience">,
+    ): Promise<void> => {
+      if (status !== "idle") return;
+      setError(null);
+      const assistantId = makeId();
+      setMessages((prev) => [
+        ...prev,
+        { id: makeId(), role: "user", text, tools: [] },
+        { id: assistantId, role: "assistant", text: "", tools: [], streaming: true },
+      ]);
+      setStatus("thinking");
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const requestBody: AgentMessageRequest = {
+        message: text,
+        ...(sessionIdRef.current === null ? {} : { sessionId: sessionIdRef.current }),
+        ...(options?.brandId === undefined ? {} : { brandId: options.brandId }),
+        ...(options?.audience === undefined ? {} : { audience: options.audience }),
+      };
+
+      try {
+        const response = await fetch("/api/agent/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal,
+        });
+
+        if (!response.ok || response.body === null) {
+          const message = await readErrorMessage(response);
+          patchAssistant(assistantId, (m) => {
+            m.error = message;
+            m.streaming = false;
+          });
+          setError(message);
+          setStatus("idle");
+          return;
+        }
+
+        await consumeSse(response.body, (frame) => {
+          applyFrame(frame, assistantId, {
+            patchAssistant,
+            setStatus,
+            setSnapshot,
+            setError,
+            sessionIdRef,
+          });
+        });
+      } catch (caught) {
+        if (!controller.signal.aborted) {
+          const message = caught instanceof Error ? caught.message : String(caught);
+          patchAssistant(assistantId, (m) => {
+            m.error = message;
+            m.streaming = false;
+          });
+          setError(message);
+        } else {
+          patchAssistant(assistantId, (m) => {
+            m.streaming = false;
+          });
+        }
+      } finally {
+        patchAssistant(assistantId, (m) => {
+          m.streaming = false;
+        });
+        setStatus("idle");
+        abortRef.current = null;
+      }
+    },
+    [patchAssistant, status],
+  );
+
+  const stop = useCallback((): void => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStatus("idle");
+  }, []);
+
+  return { messages, status, snapshot, error, send, stop };
+}
+
+interface ApplyContext {
+  readonly patchAssistant: (id: string, update: (message: ChatMessage) => void) => void;
+  readonly setStatus: (status: AgentStatus) => void;
+  readonly setSnapshot: (snapshot: SessionSnapshot) => void;
+  readonly setError: (error: string | null) => void;
+  readonly sessionIdRef: { current: string | null };
+}
+
+function applyFrame(frame: AgentStreamFrame, assistantId: string, ctx: ApplyContext): void {
+  switch (frame.type) {
+    case "session":
+      ctx.sessionIdRef.current = frame.sessionId;
+      break;
+    case "text_delta":
+      ctx.setStatus("streaming");
+      ctx.patchAssistant(assistantId, (m) => {
+        m.text += frame.text;
+      });
+      break;
+    case "thinking_delta":
+      ctx.setStatus("thinking");
+      ctx.patchAssistant(assistantId, (m) => {
+        m.thinking = (m.thinking ?? "") + frame.text;
+      });
+      break;
+    case "tool_start":
+      ctx.setStatus("tool");
+      ctx.patchAssistant(assistantId, (m) => {
+        m.tools.push({
+          toolCallId: frame.toolCallId,
+          name: frame.name,
+          label: frame.label,
+          done: false,
+          isError: false,
+        });
+      });
+      break;
+    case "tool_end":
+      ctx.patchAssistant(assistantId, (m) => {
+        const tool = m.tools.find((t) => t.toolCallId === frame.toolCallId);
+        if (tool !== undefined) {
+          tool.done = true;
+          tool.isError = frame.isError;
+          tool.summary = frame.summary;
+        }
+      });
+      break;
+    case "snapshot":
+      ctx.setSnapshot(frame.snapshot);
+      break;
+    case "error":
+      ctx.patchAssistant(assistantId, (m) => {
+        m.error = frame.message;
+      });
+      ctx.setError(frame.message);
+      break;
+    case "done":
+      break;
+    default:
+      break;
+  }
+}
+
+async function consumeSse(
+  body: ReadableStream<Uint8Array>,
+  onFrame: (frame: AgentStreamFrame) => void,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let separator = buffer.indexOf("\n\n");
+    while (separator !== -1) {
+      const rawEvent = buffer.slice(0, separator);
+      buffer = buffer.slice(separator + 2);
+      const frame = parseSseEvent(rawEvent);
+      if (frame !== null) onFrame(frame);
+      separator = buffer.indexOf("\n\n");
+    }
+  }
+}
+
+function parseSseEvent(rawEvent: string): AgentStreamFrame | null {
+  const dataLines = rawEvent
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trim());
+  if (dataLines.length === 0) return null;
+  try {
+    return JSON.parse(dataLines.join("\n")) as AgentStreamFrame;
+  } catch {
+    return null;
+  }
+}
+
+async function readErrorMessage(response: Response): Promise<string> {
+  try {
+    const payload = (await response.json()) as { error?: { message?: string } };
+    return payload.error?.message ?? `Request failed (${response.status}).`;
+  } catch {
+    return `Request failed (${response.status}).`;
+  }
+}
