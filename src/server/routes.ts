@@ -8,6 +8,8 @@ import type {
   WebsiteBrandLookup,
   WebsiteBrandManualOverrides,
 } from "../brand/types.js";
+import type { AgentConfigSummary } from "../agent/config.node.js";
+import { logError, logEvent } from "../diagnostics/logger.node.js";
 import { analyzeProject, type AnalyzeOptions, type Project } from "../core/index.js";
 import { validateProject } from "../data/schema.js";
 import { resolveBrand, validateProposalBrand } from "../proposal/brands.js";
@@ -114,6 +116,7 @@ export interface AppRouteDependencies {
   readonly brandFetch?: typeof fetch;
   readonly brandLookupHost?: WebsiteBrandLookup;
   readonly brandNow?: () => Date;
+  readonly agentSummary?: AgentConfigSummary;
 }
 
 interface ResolvedProposalDocument {
@@ -153,7 +156,9 @@ export async function handleApiRoute(
   if (!pathname.startsWith(API_PREFIX)) return null;
 
   if (request.method === "OPTIONS") return noContentResponse();
-  if (request.method === "GET" && pathname === "/api/health") return healthResponse();
+  if (request.method === "GET" && pathname === "/api/health") {
+    return healthResponse(dependencies.agentSummary);
+  }
   if (request.method === "GET" && pathname === "/api/brands") return brandsResponse();
   if (request.method === "POST" && pathname === "/api/brands/validate") {
     return validateBrandResponse(request.body);
@@ -172,12 +177,6 @@ export async function handleApiRoute(
   }
   if (request.method === "POST" && pathname === "/api/proposals/export-pdf") {
     return exportProposalPdfResponse(request.body, request.signal, dependencies);
-  }
-  if (request.method === "POST" && pathname === "/api/agent/messages") {
-    return reservedEndpointResponse(
-      "agent_not_configured",
-      "Agent/model calls are reserved for the local Node server and are not implemented yet.",
-    );
   }
   if (request.method === "POST" && pathname === "/api/brand/from-website") {
     return reservedEndpointResponse(
@@ -204,11 +203,12 @@ export async function renderPdfWithPlaywright(
   return { bytes: pdf.bytes, format: pdf.format };
 }
 
-function healthResponse(): ApiRouteResponse {
+function healthResponse(agentSummary?: AgentConfigSummary): ApiRouteResponse {
   return jsonResponse(200, {
     ok: true,
     service: "scopeforge-app-server",
     apiVersion: 1,
+    agent: agentSummary ?? { enabled: false },
     capabilities: [
       "proposal.validate",
       "proposal.analyze",
@@ -217,7 +217,7 @@ function healthResponse(): ApiRouteResponse {
       "brand.listBuiltIns",
       "brand.validate",
       "brand.extractWebsite",
-      "agent.reserved",
+      "agent.messages",
       "brand.fromWebsite.reserved",
     ],
   });
@@ -276,6 +276,7 @@ async function extractBrandResponse(
       ...(result.manualOverrides === undefined ? {} : { manualOverrides: result.manualOverrides }),
     });
   } catch (error) {
+    logError("scopeforge.route.brand_extract_failed", error, { url: request.value.url });
     return websiteBrandFailureResponse(error);
   }
 }
@@ -592,6 +593,7 @@ async function exportProposalPdfResponse(
       body: pdf.bytes,
     };
   } catch (error) {
+    logError("scopeforge.route.pdf_render_failed", error, { format, fileName });
     return pdfRenderFailureResponse(error);
   }
 }
@@ -954,6 +956,12 @@ function failureResponse(
   message: string,
   details: readonly string[] | undefined = undefined,
 ): ApiRouteResponse {
+  logEvent(status >= 500 ? "warn" : "debug", "scopeforge.route.failure", {
+    status,
+    code,
+    message,
+    ...(details === undefined ? {} : { details }),
+  });
   return jsonResponse(status, {
     ok: false,
     error: {

@@ -11,6 +11,9 @@ import {
   type AgentConfigEnv,
   type AgentConfigSummary,
 } from "../agent/config.node.js";
+import { createSessionStore, type SessionStore } from "../agent/session.node.js";
+import { installGlobalDiagnostics, logError, logEvent } from "../diagnostics/logger.node.js";
+import { handleAgentMessages } from "./agentStream.node.js";
 import { handleApiRoute, type ApiRouteResponse, type AppRouteDependencies } from "./routes.js";
 
 const DEFAULT_HOST = "127.0.0.1";
@@ -40,6 +43,8 @@ export interface RunningAppServer {
 interface RequestContext {
   readonly staticDir: string;
   readonly routes: AppRouteDependencies;
+  readonly agentConfig: AgentConfig;
+  readonly sessions: SessionStore;
   vite: ViteDevServer | null;
 }
 
@@ -53,6 +58,7 @@ interface CliOptions {
 }
 
 export async function startAppServer(options: AppServerOptions = {}): Promise<RunningAppServer> {
+  installGlobalDiagnostics();
   const agentConfig =
     options.agentConfig ?? readAgentConfigFromEnv(options.agentEnv ?? process.env);
   const agentSummary = summarizeAgentConfig(agentConfig);
@@ -64,7 +70,9 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ru
 
   const context: RequestContext = {
     staticDir,
-    routes: options.routes ?? {},
+    routes: { ...(options.routes ?? {}), agentSummary },
+    agentConfig,
+    sessions: createSessionStore(),
     vite,
   };
 
@@ -126,6 +134,32 @@ async function handleNodeRequest(
         return;
       }
 
+      if (method === "POST" && pathname === "/api/agent/messages") {
+        if (!context.agentConfig.enabled) {
+          status = 503;
+          sendRouteResponse(
+            response,
+            jsonRouteResponse(503, {
+              ok: false,
+              error: {
+                code: "agent_disabled",
+                message:
+                  context.agentConfig.reason === "disabled_by_env"
+                    ? "The agent is disabled by SCOPEFORGE_AGENT_ENABLED."
+                    : "The agent is not configured. Set SCOPEFORGE_AGENT_* environment variables.",
+              },
+            }),
+          );
+          return;
+        }
+        await handleAgentMessages(request, response, bodyResult.value, {
+          config: context.agentConfig,
+          sessions: context.sessions,
+        });
+        status = response.statusCode;
+        return;
+      }
+
       const apiResponse = await handleApiRoute(
         {
           method,
@@ -161,6 +195,11 @@ async function handleNodeRequest(
     status = response.statusCode;
   } catch (error) {
     status = 500;
+    logError("scopeforge.request.unhandled", error, {
+      method,
+      pathname,
+      headersSent: response.headersSent,
+    });
     if (!response.headersSent) {
       sendRouteResponse(
         response,
@@ -227,6 +266,7 @@ async function readJsonBody(request: IncomingMessage): Promise<JsonBodyResult> {
   try {
     return { ok: true, value: JSON.parse(rawBody) as unknown };
   } catch (error) {
+    logEvent("debug", "scopeforge.request.invalid_json", { error, bytes: rawBody.length });
     return {
       ok: false,
       response: jsonRouteResponse(400, {
@@ -450,15 +490,12 @@ function parsePort(input: string | undefined): number | undefined {
 }
 
 function logRequest(method: string, pathname: string, status: number, elapsedMs: number): void {
-  console.log(
-    JSON.stringify({
-      event: "scopeforge.request",
-      method,
-      pathname,
-      status,
-      elapsedMs: Math.round(elapsedMs * 100) / 100,
-    }),
-  );
+  logEvent(status >= 500 ? "warn" : "info", "scopeforge.request", {
+    method,
+    pathname,
+    status,
+    elapsedMs: Math.round(elapsedMs * 100) / 100,
+  });
 }
 
 function parseCliArgs(argv: readonly string[]): CliOptions {
@@ -526,7 +563,7 @@ function isDirectRun(entryPath: string | undefined): boolean {
 
 if (isDirectRun(process.argv[1])) {
   parseAndStart(process.argv.slice(2)).catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    logError("scopeforge.app_server.startup_failed", error);
     process.exitCode = 1;
   });
 }
@@ -539,12 +576,9 @@ async function parseAndStart(argv: readonly string[]): Promise<void> {
   }
 
   const server = await startAppServer(options.serverOptions);
-  console.log(
-    JSON.stringify({
-      event: "scopeforge.app_server.started",
-      url: server.url,
-      devUi: options.serverOptions.devUi === true,
-      agent: server.agent,
-    }),
-  );
+  logEvent("info", "scopeforge.app_server.started", {
+    url: server.url,
+    devUi: options.serverOptions.devUi === true,
+    agent: server.agent,
+  });
 }

@@ -79,6 +79,21 @@ describe("server API routes", () => {
       expect.objectContaining({
         ok: true,
         service: "scopeforge-app-server",
+        agent: { enabled: false },
+      }),
+    );
+  });
+
+  it("surfaces the agent summary on health when one is provided", async () => {
+    const response = await handleApiRoute(
+      { method: "GET", pathname: "/api/health" },
+      { agentSummary: { enabled: true, provider: "moonshot", model: "kimi-k2.6" } },
+    );
+    const json = expectJson(response);
+
+    expect(json.body).toEqual(
+      expect.objectContaining({
+        agent: expect.objectContaining({ enabled: true, provider: "moonshot", model: "kimi-k2.6" }),
       }),
     );
   });
@@ -345,7 +360,7 @@ describe("server API routes", () => {
     );
   });
 
-  it("keeps future agent endpoints server-side and explicitly reserved", async () => {
+  it("no longer handles the agent endpoint in the JSON router (it is streamed upstream)", async () => {
     const response = await handleApiRoute({
       method: "POST",
       pathname: "/api/agent/messages",
@@ -353,11 +368,11 @@ describe("server API routes", () => {
     });
     const json = expectJson(response);
 
-    expect(json.status).toBe(501);
+    expect(json.status).toBe(404);
     expect(json.body).toEqual(
       expect.objectContaining({
         ok: false,
-        error: expect.objectContaining({ code: "agent_not_configured" }),
+        error: expect.objectContaining({ code: "not_found" }),
       }),
     );
   });
