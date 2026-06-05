@@ -26,6 +26,7 @@ import type {
 
 export const PROPOSAL_DRAFT_TEMPLATE_IDS = [
   "generic/value-proposal",
+  "generic/scope-review",
 ] as const satisfies readonly ProposalDraftTemplateId[];
 
 const PROPOSAL_DRAFT_STATUSES = [

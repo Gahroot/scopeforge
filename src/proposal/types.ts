@@ -47,7 +47,7 @@ export interface ProposalIntake {
   readonly nextSteps: readonly string[];
 }
 
-export type ProposalDraftTemplateId = "generic/value-proposal";
+export type ProposalDraftTemplateId = "generic/value-proposal" | "generic/scope-review";
 
 export type ProposalDraftStatus = "draft" | "review" | "ready" | "sent" | "accepted" | "archived";
 
