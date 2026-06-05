@@ -89,6 +89,22 @@ Individual lens functions (`runCost`, `runValue`, `runPricing`),
 `checkGuardrails`, and helpers (`makeRng`, `triangular`, `percentile`,
 `percentiles`) are also re-exported from the same entry point.
 
+## Target conversational flow
+
+The next product layer is a chat-driven drafting experience. The assistant may
+ask questions, transform notes, and derive brand profiles from public websites,
+but accepted changes patch a structured proposal draft as the only source of
+truth. A local Node agent service handles model calls, website fetches, local
+draft files, and Playwright export so the browser stays client-safe and
+secret-free.
+
+From a fixed draft, ScopeForge runs the deterministic sequence:
+`validate → analyzeProject(seed, iterations) → render HTML → export PDF`. Client
+exports block on guardrail errors and omit internal cost floors, margins, risk
+pads, raw prompts, and unreviewed website claims. See
+[docs/CONVERSATIONAL_PROPOSALS.md](docs/CONVERSATIONAL_PROPOSALS.md) for the
+implementer details.
+
 ## Architecture
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the three-lens methodology
