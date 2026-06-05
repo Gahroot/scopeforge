@@ -8,9 +8,10 @@ export class MissingChromiumError extends Error {
   readonly code = "chromium_missing";
   readonly installCommand = CHROMIUM_INSTALL_COMMAND;
 
-  constructor(originalMessage: string) {
+  constructor(originalMessage: string, options?: { readonly cause?: unknown }) {
     super(
       `Playwright Chromium is not installed. Run this once from the project root: ${CHROMIUM_INSTALL_COMMAND}\n\nOriginal error:\n${originalMessage}`,
+      options?.cause === undefined ? undefined : { cause: options.cause },
     );
     this.name = "MissingChromiumError";
   }
@@ -135,5 +136,5 @@ function withChromiumInstallHint(error: unknown): Error {
   }
 
   const originalMessage = error instanceof Error ? error.message : String(error);
-  return new MissingChromiumError(originalMessage);
+  return new MissingChromiumError(originalMessage, { cause: error });
 }

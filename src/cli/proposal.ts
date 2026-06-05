@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { analyzeProject, type AnalyzeOptions } from "../core/index.js";
+import { installGlobalDiagnostics, logError } from "../diagnostics/logger.node.js";
 import { BUILT_IN_BRANDS, validateProposalBrand } from "../proposal/brands.js";
 import { getClientBlockingWarnings, buildProposalViewModel } from "../proposal/model.js";
 import { validateProposalIntake } from "../proposal/schema.js";
@@ -32,6 +33,7 @@ type CliResult = CliSuccess | CliFailure;
 type CliValueResult<T> = { readonly ok: true; readonly value: T } | CliFailure;
 
 async function main(argv: readonly string[]): Promise<CliResult> {
+  installGlobalDiagnostics();
   const argsResult = parseArgs(argv);
   if (!argsResult.ok) return argsResult;
   const args = argsResult.value;
@@ -271,6 +273,7 @@ main(process.argv.slice(2))
     process.exitCode = 1;
   })
   .catch((error: unknown) => {
+    logError("scopeforge.cli.proposal.unhandled", error);
     console.error(formatError(error));
     process.exitCode = 1;
   });
