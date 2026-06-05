@@ -32,6 +32,8 @@
     "vitest": "^2.1.0"
   },
   "dependencies": {
-    "@kenkaiiii/gg-ai": "^4.6.2"
+    "@kenkaiiii/gg-agent": "^4.6.2",
+    "@kenkaiiii/gg-ai": "^4.6.2",
+    "zod": "^4.4.3"
   }
 }

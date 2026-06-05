@@ -128,7 +128,6 @@ type ProposalSectionKey =
 
 interface SectionRegenState {
   readonly sectionKey: ProposalSectionKey;
-  readonly active: boolean;
   readonly originalDraft: ProposalDraft;
   readonly revisedDraft: ProposalDraft;
   readonly diff: readonly DiffLine[];
@@ -367,7 +366,7 @@ export function createProposalApp(root: HTMLElement): void {
       return;
     }
 
-    regenState = { sectionKey, active: true, originalDraft, revisedDraft, diff };
+    regenState = { sectionKey, originalDraft, revisedDraft, diff };
     draftStore = replaceCurrentDraft(draftStore, revisedDraft, {
       label: `Revised ${SECTION_META[sectionKey].label}`,
       source: "section-regen",
