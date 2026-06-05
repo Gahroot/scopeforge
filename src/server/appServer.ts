@@ -4,6 +4,13 @@ import { extname, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { performance } from "node:perf_hooks";
 import type { ViteDevServer } from "vite";
+import {
+  readAgentConfigFromEnv,
+  summarizeAgentConfig,
+  type AgentConfig,
+  type AgentConfigEnv,
+  type AgentConfigSummary,
+} from "../agent/config.node.js";
 import { handleApiRoute, type ApiRouteResponse, type AppRouteDependencies } from "./routes.js";
 
 const DEFAULT_HOST = "127.0.0.1";
@@ -18,12 +25,15 @@ export interface AppServerOptions {
   readonly staticDir?: string;
   readonly devUi?: boolean;
   readonly routes?: AppRouteDependencies;
+  readonly agentConfig?: AgentConfig;
+  readonly agentEnv?: AgentConfigEnv;
 }
 
 export interface RunningAppServer {
   readonly host: string;
   readonly port: number;
   readonly url: string;
+  readonly agent: AgentConfigSummary;
   readonly close: () => Promise<void>;
 }
 
@@ -43,6 +53,9 @@ interface CliOptions {
 }
 
 export async function startAppServer(options: AppServerOptions = {}): Promise<RunningAppServer> {
+  const agentConfig =
+    options.agentConfig ?? readAgentConfigFromEnv(options.agentEnv ?? process.env);
+  const agentSummary = summarizeAgentConfig(agentConfig);
   const root = resolve(options.root ?? process.cwd());
   const staticDir = resolve(root, options.staticDir ?? DEFAULT_STATIC_DIR);
   const host = options.host ?? process.env.SCOPEFORGE_APP_HOST ?? DEFAULT_HOST;
@@ -80,6 +93,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ru
     host,
     port: boundPort,
     url,
+    agent: agentSummary,
     close: async () => {
       if (vite !== null) await vite.close();
       await closeServer(server);
@@ -530,6 +544,7 @@ async function parseAndStart(argv: readonly string[]): Promise<void> {
       event: "scopeforge.app_server.started",
       url: server.url,
       devUi: options.serverOptions.devUi === true,
+      agent: server.agent,
     }),
   );
 }
