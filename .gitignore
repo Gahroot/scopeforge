@@ -10,3 +10,6 @@ coverage/
 out/
 
 .ezcoder/
+
+# stray secret scratch file (contains API key)
+kimi.rtf

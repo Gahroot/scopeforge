@@ -13,6 +13,7 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
+    "jsx": "react-jsx",
     "types": ["vitest/globals", "node"],
     "outDir": "dist"
   },
