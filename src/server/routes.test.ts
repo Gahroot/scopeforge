@@ -1,7 +1,29 @@
+import { acmeWebsiteHtml } from "../brand/fixtures/acmeWebsite.js";
+import type { WebsiteBrandLookup } from "../brand/types.js";
 import { tritenExample } from "../data/defaults.js";
+import { validateProposalBrand } from "../proposal/brands.js";
 import { proposalIntakeToDraft } from "../proposal/draftStore.js";
 import type { ProposalIntake } from "../proposal/types.js";
 import { handleApiRoute, type ApiRouteResponse } from "./routes.js";
+
+const routeBrandLookup: WebsiteBrandLookup = async (hostname) => {
+  if (hostname === "acme.example" || hostname === "www.acme.example") {
+    return [{ address: "93.184.216.34", family: 4 }];
+  }
+  if (hostname === "private.example") return [{ address: "10.0.0.7", family: 4 }];
+  return [{ address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 }];
+};
+
+function htmlResponse(html: string, init: ResponseInit = {}): Response {
+  return new Response(html, {
+    status: 200,
+    ...init,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      ...init.headers,
+    },
+  });
+}
 
 const sampleIntake = {
   project: tritenExample(),
@@ -59,6 +81,100 @@ describe("server API routes", () => {
         service: "scopeforge-app-server",
       }),
     );
+  });
+
+  it("extracts a ProposalBrand-compatible profile from website HTML", async () => {
+    const fetchImpl: typeof fetch = async (input) => {
+      expect(String(input)).toBe("https://acme.example/");
+      return htmlResponse(acmeWebsiteHtml);
+    };
+
+    const response = await handleApiRoute(
+      {
+        method: "POST",
+        pathname: "/api/brand/extract",
+        body: { url: "acme.example" },
+      },
+      {
+        brandFetch: fetchImpl,
+        brandLookupHost: routeBrandLookup,
+        brandNow: () => new Date("2026-01-01T00:00:00.000Z"),
+      },
+    );
+    const json = expectJson(response);
+    const brand = readRecordField(json.body, "brand");
+    const source = readRecordField(json.body, "source");
+    const sources = readRecordField(json.body, "sources");
+    const colorSources = readRecordField(sources, "colors");
+    const primarySource = readRecordField(colorSources, "primary");
+    const meta = readRecordField(json.body, "meta");
+
+    expect(json.status).toBe(200);
+    expect(validateProposalBrand(brand).ok).toBe(true);
+    expect(brand).toMatchObject({
+      id: "acme-growth-studio",
+      name: "Acme Growth Studio",
+      legalName: "Acme Growth Studio LLC",
+      tagline: "Book more premium clients without guessing.",
+      website: "https://acme.example/home",
+      logoText: "AG",
+      colors: expect.objectContaining({ primary: "#123456", accent: "#f97316" }),
+    });
+    expect(source).toMatchObject({
+      requestedUrl: "acme.example",
+      normalizedUrl: "https://acme.example/",
+      finalUrl: "https://acme.example/",
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+      statusCode: 200,
+      extractor: "scopeforge.websiteBrand.node",
+      extractorVersion: 1,
+    });
+    expect(readStringField(meta, "themeColor")).toBe("#123456");
+    expect(primarySource).toMatchObject({ source: "css", value: "#123456" });
+  });
+
+  it("rejects unsafe brand extraction URLs before fetching", async () => {
+    let fetched = false;
+    const response = await handleApiRoute(
+      {
+        method: "POST",
+        pathname: "/api/brand/extract",
+        body: { url: "https://private.example" },
+      },
+      {
+        brandFetch: async () => {
+          fetched = true;
+          return htmlResponse(acmeWebsiteHtml);
+        },
+        brandLookupHost: routeBrandLookup,
+      },
+    );
+    const json = expectJson(response);
+    const error = readRecordField(json.body, "error");
+
+    expect(json.status).toBe(400);
+    expect(readStringField(error, "code")).toBe("brand_url_blocked");
+    expect(fetched).toBe(false);
+  });
+
+  it("returns graceful errors for website fetch failures", async () => {
+    const response = await handleApiRoute(
+      {
+        method: "POST",
+        pathname: "/api/brand/extract",
+        body: { url: "https://acme.example" },
+      },
+      {
+        brandFetch: async () => htmlResponse("<html><body>error</body></html>", { status: 503 }),
+        brandLookupHost: routeBrandLookup,
+      },
+    );
+    const json = expectJson(response);
+    const error = readRecordField(json.body, "error");
+
+    expect(json.status).toBe(502);
+    expect(readStringField(error, "code")).toBe("brand_fetch_failed");
+    expect(readStringField(error, "message")).toContain("HTTP 503");
   });
 
   it("returns proposal validation errors", async () => {

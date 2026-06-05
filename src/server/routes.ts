@@ -1,3 +1,13 @@
+import {
+  WebsiteBrandFetchError,
+  extractWebsiteBrand as extractWebsiteBrandFromUrl,
+} from "../brand/websiteBrand.node.js";
+import type {
+  ExtractWebsiteBrandOptions,
+  WebsiteBrandExtractionResult,
+  WebsiteBrandLookup,
+  WebsiteBrandManualOverrides,
+} from "../brand/types.js";
 import { analyzeProject, type AnalyzeOptions, type Project } from "../core/index.js";
 import { validateProject } from "../data/schema.js";
 import { resolveBrand, validateProposalBrand } from "../proposal/brands.js";
@@ -12,6 +22,7 @@ import {
 import type {
   ProposalAudience,
   ProposalBrand,
+  ProposalBrandColors,
   ProposalDraft,
   ProposalDraftTemplateId,
   ProposalIntake,
@@ -22,9 +33,37 @@ import { renderValueProposalHtml } from "../render/valueProposalHtml.js";
 
 const API_PREFIX = "/api";
 const DEFAULT_BRAND_ID = "nolan";
+const MAX_BRAND_BYTES = 5_000_000;
+const MAX_BRAND_REDIRECTS = 8;
+const MAX_BRAND_TIMEOUT_MS = 30_000;
 const DEFAULT_PDF_FORMAT = "Letter";
 const DEFAULT_TEMPLATE_ID = "generic/value-proposal" satisfies ProposalDraftTemplateId;
 const MAX_ITERATIONS = 250_000;
+const PROPOSAL_BRAND_COLOR_KEYS = [
+  "primary",
+  "secondary",
+  "accent",
+  "background",
+  "surface",
+  "text",
+  "mutedText",
+  "border",
+] as const satisfies readonly (keyof ProposalBrandColors)[];
+
+type WebsiteBrandManualStringKey = Exclude<keyof WebsiteBrandManualOverrides, "colors" | "notes">;
+
+const WEBSITE_BRAND_MANUAL_STRING_KEYS = [
+  "id",
+  "name",
+  "legalName",
+  "tagline",
+  "website",
+  "email",
+  "phone",
+  "logoText",
+  "logoUrl",
+  "source",
+] as const satisfies readonly WebsiteBrandManualStringKey[];
 
 export interface AppRouteRequest {
   readonly method: string;
@@ -64,8 +103,17 @@ export type ProposalPdfRenderer = (
   request: ProposalPdfRenderRequest,
 ) => Promise<ProposalPdfRenderResult>;
 
+export type WebsiteBrandExtractor = (
+  url: string,
+  options: ExtractWebsiteBrandOptions,
+) => Promise<WebsiteBrandExtractionResult>;
+
 export interface AppRouteDependencies {
   readonly renderPdf?: ProposalPdfRenderer;
+  readonly extractWebsiteBrand?: WebsiteBrandExtractor;
+  readonly brandFetch?: typeof fetch;
+  readonly brandLookupHost?: WebsiteBrandLookup;
+  readonly brandNow?: () => Date;
 }
 
 interface ResolvedProposalDocument {
@@ -85,6 +133,14 @@ interface ProposalRenderBundle {
   readonly html: string;
 }
 
+interface BrandExtractRouteInput {
+  readonly url: string;
+  readonly manualOverrides?: WebsiteBrandManualOverrides;
+  readonly timeoutMs?: number;
+  readonly maxBytes?: number;
+  readonly maxRedirects?: number;
+}
+
 type RouteValueResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly response: ApiRouteResponse };
@@ -101,6 +157,9 @@ export async function handleApiRoute(
   if (request.method === "GET" && pathname === "/api/brands") return brandsResponse();
   if (request.method === "POST" && pathname === "/api/brands/validate") {
     return validateBrandResponse(request.body);
+  }
+  if (request.method === "POST" && pathname === "/api/brand/extract") {
+    return extractBrandResponse(request.body, dependencies);
   }
   if (request.method === "POST" && pathname === "/api/proposals/validate") {
     return validateProposalResponse(request.body);
@@ -157,6 +216,7 @@ function healthResponse(): ApiRouteResponse {
       "proposal.exportPdf",
       "brand.listBuiltIns",
       "brand.validate",
+      "brand.extractWebsite",
       "agent.reserved",
       "brand.fromWebsite.reserved",
     ],
@@ -178,6 +238,258 @@ function validateBrandResponse(input: unknown): ApiRouteResponse {
   }
 
   return jsonResponse(200, { ok: true, brand: result.value });
+}
+
+async function extractBrandResponse(
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const request = resolveBrandExtractInput(input);
+  if (!request.ok) return request.response;
+
+  const extractor = dependencies.extractWebsiteBrand ?? extractWebsiteBrandFromUrl;
+  try {
+    const result = await extractor(
+      request.value.url,
+      buildWebsiteBrandExtractOptions(request.value, dependencies),
+    );
+    const brandResult = validateProposalBrand(result.proposalBrand);
+    if (!brandResult.ok) {
+      return validationFailureResponse("Extracted brand profile is invalid.", brandResult.errors);
+    }
+
+    return jsonResponse(200, {
+      ok: true,
+      brand: brandResult.value,
+      source: result.source,
+      sources: result.sources,
+      meta: result.meta,
+      palette: result.palette,
+      assets: result.assets,
+      favicons: result.favicons,
+      logos: result.logos,
+      ogImages: result.ogImages,
+      colors: result.colors,
+      ...(result.name === undefined ? {} : { name: result.name }),
+      ...(result.tagline === undefined ? {} : { tagline: result.tagline }),
+      ...(result.logoUrl === undefined ? {} : { logoUrl: result.logoUrl }),
+      ...(result.manualOverrides === undefined ? {} : { manualOverrides: result.manualOverrides }),
+    });
+  } catch (error) {
+    return websiteBrandFailureResponse(error);
+  }
+}
+
+function resolveBrandExtractInput(input: unknown): RouteValueResult<BrandExtractRouteInput> {
+  if (!isRecord(input)) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "brand_extract_request_invalid",
+        "Brand extraction request body must be a JSON object with a url string.",
+      ),
+    );
+  }
+
+  const rawUrl = input.url;
+  if (typeof rawUrl !== "string" || rawUrl.trim().length === 0) {
+    return routeFailure(
+      failureResponse(400, "brand_url_invalid", "url must be a non-empty website URL."),
+    );
+  }
+
+  const manualOverrides = resolveWebsiteBrandManualOverrides(input);
+  if (!manualOverrides.ok) return manualOverrides;
+
+  const timeoutMs = readOptionalIntegerInRange(input, "timeoutMs", 500, MAX_BRAND_TIMEOUT_MS);
+  if (!timeoutMs.ok) return timeoutMs;
+
+  const maxBytes = readOptionalIntegerInRange(input, "maxBytes", 50_000, MAX_BRAND_BYTES);
+  if (!maxBytes.ok) return maxBytes;
+
+  const maxRedirects = readOptionalIntegerInRange(input, "maxRedirects", 0, MAX_BRAND_REDIRECTS);
+  if (!maxRedirects.ok) return maxRedirects;
+
+  return {
+    ok: true,
+    value: {
+      url: rawUrl.trim(),
+      ...(manualOverrides.value === undefined ? {} : { manualOverrides: manualOverrides.value }),
+      ...(timeoutMs.value === undefined ? {} : { timeoutMs: timeoutMs.value }),
+      ...(maxBytes.value === undefined ? {} : { maxBytes: maxBytes.value }),
+      ...(maxRedirects.value === undefined ? {} : { maxRedirects: maxRedirects.value }),
+    },
+  };
+}
+
+function buildWebsiteBrandExtractOptions(
+  request: BrandExtractRouteInput,
+  dependencies: AppRouteDependencies,
+): ExtractWebsiteBrandOptions {
+  return {
+    ...(request.manualOverrides === undefined ? {} : { manualOverrides: request.manualOverrides }),
+    ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+    ...(request.maxBytes === undefined ? {} : { maxBytes: request.maxBytes }),
+    ...(request.maxRedirects === undefined ? {} : { maxRedirects: request.maxRedirects }),
+    ...(dependencies.brandFetch === undefined ? {} : { fetchImpl: dependencies.brandFetch }),
+    ...(dependencies.brandLookupHost === undefined
+      ? {}
+      : { lookupHost: dependencies.brandLookupHost }),
+    ...(dependencies.brandNow === undefined ? {} : { now: dependencies.brandNow }),
+  };
+}
+
+function resolveWebsiteBrandManualOverrides(
+  input: Readonly<Record<string, unknown>>,
+): RouteValueResult<WebsiteBrandManualOverrides | undefined> {
+  const rawOverrides = input.manualOverrides;
+  if (rawOverrides === undefined) return { ok: true, value: undefined };
+  if (!isRecord(rawOverrides)) {
+    return routeFailure(
+      failureResponse(400, "brand_overrides_invalid", "manualOverrides must be an object."),
+    );
+  }
+
+  const errors: string[] = [];
+  const stringOverrides: Partial<Record<WebsiteBrandManualStringKey, string>> = {};
+  for (const key of WEBSITE_BRAND_MANUAL_STRING_KEYS) {
+    const value = rawOverrides[key];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || value.trim().length === 0) {
+      errors.push(`manualOverrides.${key}: Must be a non-empty string when provided.`);
+      continue;
+    }
+    stringOverrides[key] = value.trim();
+  }
+
+  const colors = readWebsiteBrandManualColors(rawOverrides, errors);
+  const notes = readWebsiteBrandManualNotes(rawOverrides, errors);
+  if (errors.length > 0) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "brand_overrides_invalid",
+        "manualOverrides contains invalid fields.",
+        errors,
+      ),
+    );
+  }
+
+  return {
+    ok: true,
+    value: {
+      ...stringOverrides,
+      ...(colors === undefined ? {} : { colors }),
+      ...(notes === undefined ? {} : { notes }),
+    },
+  };
+}
+
+function readWebsiteBrandManualColors(
+  input: Readonly<Record<string, unknown>>,
+  errors: string[],
+): Partial<ProposalBrandColors> | undefined {
+  const rawColors = input.colors;
+  if (rawColors === undefined) return undefined;
+  if (!isRecord(rawColors)) {
+    errors.push("manualOverrides.colors: Must be an object when provided.");
+    return undefined;
+  }
+
+  const colors: Partial<Record<keyof ProposalBrandColors, string>> = {};
+  for (const key of PROPOSAL_BRAND_COLOR_KEYS) {
+    const value = rawColors[key];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || value.trim().length === 0) {
+      errors.push(`manualOverrides.colors.${key}: Must be a non-empty string when provided.`);
+      continue;
+    }
+    colors[key] = value.trim();
+  }
+
+  return Object.keys(colors).length === 0 ? undefined : colors;
+}
+
+function readWebsiteBrandManualNotes(
+  input: Readonly<Record<string, unknown>>,
+  errors: string[],
+): readonly string[] | undefined {
+  const rawNotes = input.notes;
+  if (rawNotes === undefined) return undefined;
+  if (!Array.isArray(rawNotes)) {
+    errors.push("manualOverrides.notes: Must be an array of strings when provided.");
+    return undefined;
+  }
+
+  const notes: string[] = [];
+  for (const [index, value] of rawNotes.entries()) {
+    if (typeof value !== "string" || value.trim().length === 0) {
+      errors.push(`manualOverrides.notes.${index}: Must be a non-empty string.`);
+      continue;
+    }
+    notes.push(value.trim());
+  }
+  return notes.length === 0 ? undefined : notes;
+}
+
+function readOptionalIntegerInRange(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+  min: number,
+  max: number,
+): RouteValueResult<number | undefined> {
+  const rawValue = input[key];
+  if (rawValue === undefined) return { ok: true, value: undefined };
+  if (
+    typeof rawValue !== "number" ||
+    !Number.isInteger(rawValue) ||
+    rawValue < min ||
+    rawValue > max
+  ) {
+    return routeFailure(
+      failureResponse(400, `${key}_invalid`, `${key} must be an integer from ${min} to ${max}.`),
+    );
+  }
+  return { ok: true, value: rawValue };
+}
+
+function websiteBrandFailureResponse(error: unknown): ApiRouteResponse {
+  if (error instanceof WebsiteBrandFetchError) {
+    const details = websiteBrandFailureDetails(error);
+    switch (error.code) {
+      case "BAD_URL":
+      case "BAD_SCHEME":
+      case "BAD_HOSTNAME":
+        return failureResponse(400, "brand_url_invalid", error.message, details);
+      case "BLOCKED_ADDRESS":
+        return failureResponse(400, "brand_url_blocked", error.message, details);
+      case "BODY_TOO_LARGE":
+        return failureResponse(413, "brand_response_too_large", error.message, details);
+      case "TIMEOUT":
+        return failureResponse(504, "brand_fetch_timeout", error.message, details);
+      case "HTTP_ERROR":
+      case "NON_HTML":
+      case "TOO_MANY_REDIRECTS":
+      case "REDIRECT_WITHOUT_LOCATION":
+        return failureResponse(502, "brand_fetch_failed", error.message, details);
+    }
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  return failureResponse(
+    503,
+    "brand_extract_failed",
+    "Website brand extraction failed before a brand could be produced.",
+    [message],
+  );
+}
+
+function websiteBrandFailureDetails(error: WebsiteBrandFetchError): readonly string[] {
+  return [
+    `extractorCode: ${error.code}`,
+    `url: ${error.url}`,
+    ...(error.detail === undefined ? [] : [`detail: ${error.detail}`]),
+  ];
 }
 
 function validateProposalResponse(input: unknown): ApiRouteResponse {
