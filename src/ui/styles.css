@@ -11,7 +11,7 @@
 
 body {
   margin: 0;
-  min-width: 1080px;
+  min-width: 1180px;
   min-height: 100vh;
   background:
     radial-gradient(circle at 20% 0%, rgba(37, 99, 235, 0.18), transparent 30rem),
@@ -93,7 +93,7 @@ code {
 .workspace {
   display: grid;
   gap: 20px;
-  grid-template-columns: 430px minmax(620px, 1fr);
+  grid-template-columns: 520px minmax(620px, 1fr);
   min-height: 0;
 }
 
@@ -110,6 +110,8 @@ code {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  max-height: calc(100vh - 190px);
+  overflow: auto;
   padding: 20px;
 }
 
@@ -231,6 +233,252 @@ button:disabled {
 
 .diagnostics li {
   margin: 6px 0;
+}
+
+.brand-panel {
+  background: #f8fafc;
+  border: 1px solid #dbe3ef;
+  border-radius: 18px;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.brand-panel summary {
+  align-items: center;
+  color: #0f172a;
+  cursor: pointer;
+  display: flex;
+  font-weight: 850;
+  justify-content: space-between;
+  list-style: none;
+  padding: 14px 16px;
+}
+
+.brand-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.brand-panel-kicker {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.brand-panel-body {
+  border-top: 1px solid #dbe3ef;
+  display: grid;
+  gap: 12px;
+  max-height: 560px;
+  overflow: auto;
+  padding: 14px;
+}
+
+.brand-status {
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 750;
+  padding: 10px 12px;
+}
+
+.brand-status.neutral {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.brand-status.success {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.brand-status.error {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.brand-status ul {
+  font-weight: 600;
+  margin: 8px 0 0;
+  padding-left: 16px;
+}
+
+.brand-preview {
+  background: #fff;
+  border: 1px solid #dbe3ef;
+  border-radius: 16px;
+  display: grid;
+  gap: 12px;
+  min-height: 112px;
+  padding: 14px;
+}
+
+.brand-preview-header {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 56px 1fr;
+}
+
+.brand-preview-header strong,
+.brand-preview-header span,
+.brand-preview-header small {
+  display: block;
+}
+
+.brand-preview-header strong {
+  color: #0f172a;
+  font-size: 16px;
+}
+
+.brand-preview-header span,
+.brand-preview-header small {
+  color: #64748b;
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.brand-preview-logo {
+  align-items: center;
+  background: #111827;
+  border-radius: 14px;
+  color: #fff;
+  display: flex;
+  font-weight: 900;
+  height: 56px;
+  justify-content: center;
+  overflow: hidden;
+  width: 56px;
+}
+
+.brand-preview-logo img {
+  background: #fff;
+  height: 100%;
+  object-fit: contain;
+  padding: 6px;
+  width: 100%;
+}
+
+.brand-swatches {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(8, 1fr);
+}
+
+.brand-swatch {
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  border-radius: 999px;
+  height: 18px;
+}
+
+.brand-editor {
+  display: grid;
+  gap: 12px;
+}
+
+.brand-colors {
+  border: 1px solid #dbe3ef;
+  border-radius: 14px;
+  margin: 0;
+  padding: 12px;
+}
+
+.brand-colors legend {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 0 6px;
+}
+
+.brand-color-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.brand-color-field {
+  align-items: center;
+  display: grid;
+  gap: 7px;
+  grid-template-columns: 1fr 34px 98px;
+}
+
+.brand-color-field span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.brand-color-field input[type="color"] {
+  border-radius: 9px;
+  min-height: 34px;
+  padding: 3px;
+  width: 34px;
+}
+
+.brand-color-field input[type="text"] {
+  min-height: 34px;
+  padding: 6px 8px;
+}
+
+.brand-json {
+  flex: initial;
+  min-height: 130px;
+}
+
+.brand-button-row {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.brand-button-row button {
+  min-height: 40px;
+}
+
+.brand-button-row button:nth-child(3) {
+  grid-column: 1 / -1;
+}
+
+.brand-metadata {
+  background: #fff;
+  border: 1px dashed #cbd5e1;
+  border-radius: 14px;
+  color: #475569;
+  font-size: 12px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.brand-metadata dl {
+  display: grid;
+  gap: 5px 10px;
+  grid-template-columns: 92px 1fr;
+  margin: 0 0 10px;
+}
+
+.brand-metadata dt {
+  color: #334155;
+  font-weight: 850;
+}
+
+.brand-metadata dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.brand-metadata strong {
+  color: #0f172a;
+  display: block;
+  margin: 10px 0 5px;
+}
+
+.brand-metadata ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.brand-metadata li {
+  margin: 5px 0;
 }
 
 .preview-panel {

@@ -1,6 +1,13 @@
 import { analyzeProject } from "../core/index.js";
-import { BUILT_IN_BRANDS } from "../proposal/brands.js";
+import { BUILT_IN_BRANDS, validateProposalBrand } from "../proposal/brands.js";
 import { proposalIntakeToDraft } from "../proposal/draftStore.js";
+import {
+  bindBrandPanel,
+  brandPanelShell,
+  queryBrandPanel,
+  type BrandApplyResult,
+  type BrandPanelState,
+} from "./brandPanel.js";
 import { getClientBlockingWarnings } from "../proposal/model.js";
 import {
   PROPOSAL_DRAFT_TEMPLATE_IDS,
@@ -31,9 +38,11 @@ interface ProposalAppState {
   readonly pdfDownloadButton: HTMLButtonElement;
   readonly printButton: HTMLButtonElement;
   readonly validateButton: HTMLButtonElement;
+  readonly brandPanel: BrandPanelState;
 }
 
 type BuiltInUiBrandId = "nolan" | "partners";
+type UiBrandId = BuiltInUiBrandId | "custom";
 
 interface PreviewResult {
   readonly html: string;
@@ -41,7 +50,7 @@ interface PreviewResult {
   readonly draft: ProposalDraft;
   readonly intake: ProposalIntake;
   readonly templateId: ProposalDraftTemplateId;
-  readonly brandId: BuiltInUiBrandId;
+  readonly brandRequest: BuiltInUiBrandId | ProposalBrand;
   readonly audience: ProposalAudience;
 }
 
@@ -58,6 +67,22 @@ type JsonParseResult =
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly message: string };
 
+type BrandSelectionResult =
+  | {
+      readonly ok: true;
+      readonly brand: ProposalBrand;
+      readonly requestBrand: BuiltInUiBrandId | ProposalBrand;
+    }
+  | { readonly ok: false; readonly message: string; readonly details: readonly string[] };
+
+type BrandSaveResult =
+  | { readonly ok: true; readonly json: string; readonly details: readonly string[] }
+  | { readonly ok: false; readonly message: string; readonly details: readonly string[] };
+
+type SavedBrandResult =
+  | { readonly ok: true; readonly brand: ProposalBrand }
+  | { readonly ok: false; readonly details: readonly string[] };
+
 interface ApiErrorSummary {
   readonly message: string;
   readonly details: readonly string[];
@@ -68,16 +93,42 @@ export function createProposalApp(root: HTMLElement): void {
 
   const state = queryState(root);
   let currentPreview: PreviewResult | null = null;
+  let customBrand: ProposalBrand | null = null;
   let previewTimer: number | null = null;
 
+  bindBrandPanel(state.brandPanel, {
+    getPresetBrand: () => selectedEditorFallbackBrand(state.brandSelect.value, customBrand),
+    onBrandApplied: (brand) => {
+      customBrand = brand;
+      state.brandSelect.value = "custom";
+      const saveResult = saveBrandToCurrentInput(state, brand);
+      if (saveResult.ok) {
+        state.textarea.value = saveResult.json;
+        currentPreview = preview(state, customBrand);
+        return {
+          ok: true,
+          message: `Applied and saved ${brand.name} to the current proposal JSON.`,
+          details: saveResult.details,
+        } satisfies BrandApplyResult;
+      }
+
+      currentPreview = preview(state, customBrand);
+      return {
+        ok: false,
+        message: `Applied ${brand.name} for this session, but could not save it to proposal JSON.`,
+        details: [saveResult.message, ...saveResult.details],
+      } satisfies BrandApplyResult;
+    },
+  });
+
   state.fileInput.addEventListener("change", () => {
-    void loadSelectedFile(state).then((previewResult) => {
+    void loadSelectedFile(state, customBrand).then((previewResult) => {
       currentPreview = previewResult;
     });
   });
 
   state.validateButton.addEventListener("click", () => {
-    currentPreview = preview(state);
+    currentPreview = preview(state, customBrand);
   });
 
   state.textarea.addEventListener("input", () => {
@@ -85,23 +136,23 @@ export function createProposalApp(root: HTMLElement): void {
     setPreviewButtons(state, false);
     if (previewTimer !== null) window.clearTimeout(previewTimer);
     previewTimer = window.setTimeout(() => {
-      currentPreview = preview(state);
+      currentPreview = preview(state, customBrand);
       previewTimer = null;
     }, 500);
   });
 
   state.brandSelect.addEventListener("change", () => {
-    currentPreview = preview(state);
+    currentPreview = preview(state, customBrand);
   });
   state.audienceSelect.addEventListener("change", () => {
-    currentPreview = preview(state);
+    currentPreview = preview(state, customBrand);
   });
   state.templateSelect.addEventListener("change", () => {
-    currentPreview = preview(state);
+    currentPreview = preview(state, customBrand);
   });
 
   state.htmlDownloadButton.addEventListener("click", () => {
-    const previewResult = currentPreview ?? preview(state);
+    const previewResult = currentPreview ?? preview(state, customBrand);
     if (previewResult === null) return;
     currentPreview = previewResult;
     downloadText(
@@ -112,7 +163,7 @@ export function createProposalApp(root: HTMLElement): void {
   });
 
   state.pdfDownloadButton.addEventListener("click", () => {
-    const previewResult = currentPreview ?? preview(state);
+    const previewResult = currentPreview ?? preview(state, customBrand);
     if (previewResult === null) return;
     currentPreview = previewResult;
     void downloadPdf(state, previewResult);
@@ -155,6 +206,7 @@ function appShell(): string {
             <select id="brand-select">
               <option value="nolan">Nolan</option>
               <option value="partners">Partners</option>
+              <option value="custom">Custom / saved</option>
             </select>
           </label>
           <label class="field">
@@ -173,6 +225,8 @@ function appShell(): string {
             <option value="generic/scope-review">Scope review</option>
           </select>
         </label>
+
+        ${brandPanelShell()}
 
         <textarea id="intake-text" spellcheck="false" placeholder="Paste ProposalIntake, ProposalDraft, { intake }, or { draft } JSON here..."></textarea>
 
@@ -208,6 +262,7 @@ function queryState(root: HTMLElement): ProposalAppState {
     pdfDownloadButton: queryElement(root, "#pdf-download-button", HTMLButtonElement),
     printButton: queryElement(root, "#print-button", HTMLButtonElement),
     validateButton: queryElement(root, "#validate-button", HTMLButtonElement),
+    brandPanel: queryBrandPanel(root),
   };
 }
 
@@ -223,14 +278,17 @@ function queryElement<T extends Element>(
   return element;
 }
 
-async function loadSelectedFile(state: ProposalAppState): Promise<PreviewResult | null> {
+async function loadSelectedFile(
+  state: ProposalAppState,
+  customBrand: ProposalBrand | null,
+): Promise<PreviewResult | null> {
   const file = state.fileInput.files?.[0];
   if (file === undefined) return null;
   state.textarea.value = await file.text();
-  return preview(state);
+  return preview(state, customBrand);
 }
 
-function preview(state: ProposalAppState): PreviewResult | null {
+function preview(state: ProposalAppState, customBrand: ProposalBrand | null): PreviewResult | null {
   const raw = state.textarea.value.trim();
   if (raw.length === 0) {
     setEmptyPreview(state);
@@ -250,8 +308,12 @@ function preview(state: ProposalAppState): PreviewResult | null {
     return null;
   }
 
-  const brandId = selectedBrandId(state.brandSelect.value);
-  const brand = selectedBrand(brandId);
+  const brandResult = resolveBrandSelection(parsed.value, state.brandSelect.value, customBrand);
+  if (!brandResult.ok) {
+    setValidationFailure(state, brandResult.message, brandResult.details);
+    return null;
+  }
+
   const audience = selectedAudience(state.audienceSelect.value);
   const analysis = analyzeProject(inputResult.intake.project);
   const blockingWarnings = getClientBlockingWarnings(analysis, { audience });
@@ -264,7 +326,7 @@ function preview(state: ProposalAppState): PreviewResult | null {
     return null;
   }
 
-  const html = renderValueProposalHtml(inputResult.draft, { brand, audience });
+  const html = renderValueProposalHtml(inputResult.draft, { brand: brandResult.brand, audience });
   state.iframe.srcdoc = html;
   setPreviewButtons(state, true);
   setSuccess(
@@ -281,7 +343,7 @@ function preview(state: ProposalAppState): PreviewResult | null {
     draft: inputResult.draft,
     intake: inputResult.intake,
     templateId,
-    brandId,
+    brandRequest: brandResult.requestBrand,
     audience,
   };
 }
@@ -412,7 +474,7 @@ function buildPdfRequest(
   return {
     ...documentPayload,
     templateId: previewResult.templateId,
-    brand: previewResult.brandId,
+    brand: previewResult.brandRequest,
     audience: previewResult.audience,
     fileName,
   };
@@ -453,8 +515,111 @@ async function readApiError(response: Response): Promise<ApiErrorSummary> {
   };
 }
 
-function selectedBrandId(input: string): BuiltInUiBrandId {
-  return input === "partners" ? "partners" : "nolan";
+function resolveBrandSelection(
+  input: unknown,
+  selectedValue: string,
+  customBrand: ProposalBrand | null,
+): BrandSelectionResult {
+  const brandId = selectedBrandId(selectedValue);
+  if (brandId !== "custom") {
+    return { ok: true, brand: selectedBrand(brandId), requestBrand: brandId };
+  }
+
+  if (customBrand !== null) {
+    return { ok: true, brand: customBrand, requestBrand: customBrand };
+  }
+
+  const savedBrand = readSavedBrand(input);
+  if (savedBrand.ok) {
+    return { ok: true, brand: savedBrand.brand, requestBrand: savedBrand.brand };
+  }
+
+  return {
+    ok: false,
+    message: "Custom brand is selected, but no valid custom brand has been applied or saved.",
+    details: savedBrand.details,
+  };
+}
+
+function readSavedBrand(input: unknown): SavedBrandResult {
+  if (!isRecord(input) || !Object.hasOwn(input, "brand")) {
+    return {
+      ok: false,
+      details: [
+        "Apply & save a custom brand, paste a ProposalBrand under top-level `brand`, or choose a preset.",
+      ],
+    };
+  }
+
+  const result = validateProposalBrand(input.brand);
+  if (!result.ok) {
+    return {
+      ok: false,
+      details: result.errors.map((error) => `brand.${error.path}: ${error.message}`),
+    };
+  }
+  return { ok: true, brand: result.value };
+}
+
+function saveBrandToCurrentInput(state: ProposalAppState, brand: ProposalBrand): BrandSaveResult {
+  const raw = state.textarea.value.trim();
+  if (raw.length === 0) {
+    return {
+      ok: false,
+      message: "No proposal JSON is loaded.",
+      details: ["Paste or upload a proposal first, then apply & save the custom brand."],
+    };
+  }
+
+  const parsed = parseJson(raw);
+  if (!parsed.ok) {
+    return { ok: false, message: "Proposal JSON could not be parsed.", details: [parsed.message] };
+  }
+
+  const templateId = selectedTemplateId(state.templateSelect.value);
+  const inputResult = resolveProposalInput(parsed.value, templateId);
+  if (!inputResult.ok) {
+    return { ok: false, message: inputResult.message, details: inputResult.details };
+  }
+
+  return {
+    ok: true,
+    json: JSON.stringify(buildBrandedDraftEnvelope(parsed.value, inputResult, brand), null, 2),
+    details: ["Saved as a top-level `brand` next to the validated proposal draft JSON."],
+  };
+}
+
+function buildBrandedDraftEnvelope(
+  input: unknown,
+  proposal: Extract<ProposalInputResult, { readonly ok: true }>,
+  brand: ProposalBrand,
+): Readonly<Record<string, unknown>> {
+  if (isRecord(input) && Object.hasOwn(input, "draft")) {
+    return { ...input, draft: proposal.draft, brand };
+  }
+
+  if (isRecord(input) && Object.hasOwn(input, "intake")) {
+    return { ...input, draft: proposal.draft, intake: proposal.intake, brand };
+  }
+
+  if (proposal.kind === "draft") return { draft: proposal.draft, brand };
+  return { draft: proposal.draft, intake: proposal.intake, brand };
+}
+
+function selectedEditorFallbackBrand(
+  input: string,
+  customBrand: ProposalBrand | null,
+): ProposalBrand {
+  const brandId = selectedBrandId(input);
+  if (brandId === "custom" && customBrand !== null) return customBrand;
+  if (brandId === "custom") return BUILT_IN_BRANDS.nolan;
+  return selectedBrand(brandId);
+}
+
+function selectedBrandId(input: string): UiBrandId {
+  if (input === "partners") return "partners";
+  if (input === "custom") return "custom";
+  return "nolan";
 }
 
 function selectedBrand(input: BuiltInUiBrandId): ProposalBrand {
