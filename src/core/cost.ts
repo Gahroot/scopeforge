@@ -33,8 +33,13 @@ export function runCost(model: CostModel, rng: Rng, iterations = DEFAULT_ITERATI
   for (let i = 0; i < iterations; i++) {
     let hours = 0;
     for (let w = 0; w < model.workstreams.length; w++) {
-      const h = model.workstreams[w]!.hours;
-      hours += triangular(rng, h.optimistic, h.likely, h.pessimistic) * factors[w]!;
+      const workstream = model.workstreams[w];
+      const factor = factors[w];
+      if (workstream === undefined || factor === undefined) {
+        throw new Error("Cost workstream and factor arrays are out of sync.");
+      }
+      const h = workstream.hours;
+      hours += triangular(rng, h.optimistic, h.likely, h.pessimistic) * factor;
     }
     const r = model.blendedRate;
     const rate = triangular(rng, r.optimistic, r.likely, r.pessimistic);

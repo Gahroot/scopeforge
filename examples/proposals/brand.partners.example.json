@@ -1,0 +1,20 @@
+{
+  "id": "partners-custom",
+  "name": "ScopeForge Partners",
+  "legalName": "ScopeForge Partners LLC",
+  "tagline": "Outcome-based AI delivery for operating teams.",
+  "website": "https://scopeforge.local",
+  "email": "partners@scopeforge.local",
+  "phone": "+1 555 010 0456",
+  "logoText": "SFP",
+  "colors": {
+    "primary": "#0f172a",
+    "secondary": "#1e293b",
+    "accent": "#0f766e",
+    "background": "#f7f7f4",
+    "surface": "#ffffff",
+    "text": "#172033",
+    "mutedText": "#667085",
+    "border": "#d9e0e8"
+  }
+}

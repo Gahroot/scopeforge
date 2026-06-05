@@ -3,7 +3,6 @@ import { makeRng, triangular } from "./random.js";
 import { percentile } from "./stats.js";
 import { runCost, effectiveAiFactor } from "./cost.js";
 import { runValue } from "./value.js";
-import { runPricing } from "./pricing.js";
 import { analyzeProject } from "./index.js";
 import { tritenExample, createDefaultProject } from "../data/defaults.js";
 import type { Workstream } from "./types.js";
@@ -46,8 +45,18 @@ describe("stats.percentile", () => {
 
 describe("cost — AI leverage rule", () => {
   it("ignores aiFactor on judgment work, applies it otherwise", () => {
-    const judgment: Workstream = { name: "QA", hours: { optimistic: 1, likely: 1, pessimistic: 1 }, aiFactor: 0.5, judgment: true };
-    const build: Workstream = { name: "Connector", hours: { optimistic: 1, likely: 1, pessimistic: 1 }, aiFactor: 0.5, judgment: false };
+    const judgment: Workstream = {
+      name: "QA",
+      hours: { optimistic: 1, likely: 1, pessimistic: 1 },
+      aiFactor: 0.5,
+      judgment: true,
+    };
+    const build: Workstream = {
+      name: "Connector",
+      hours: { optimistic: 1, likely: 1, pessimistic: 1 },
+      aiFactor: 0.5,
+      judgment: false,
+    };
     expect(effectiveAiFactor(judgment)).toBe(1);
     expect(effectiveAiFactor(build)).toBe(0.5);
   });
@@ -97,9 +106,10 @@ describe("value — footing rule (the rule we learned the hard way)", () => {
 describe("pricing — payback uses conservative value", () => {
   it("computes ~5 month payback for the $40K Triten pilot", () => {
     const p = analyzeProject(tritenExample());
-    expect(p.pricing.paybackMonths).not.toBeNull();
-    expect(p.pricing.paybackMonths!).toBeGreaterThan(3);
-    expect(p.pricing.paybackMonths!).toBeLessThan(7);
+    const paybackMonths = p.pricing.paybackMonths;
+    if (paybackMonths === null) throw new Error("Expected Triten pilot to have a payback.");
+    expect(paybackMonths).toBeGreaterThan(3);
+    expect(paybackMonths).toBeLessThan(7);
   });
 
   it("targets 10–20% of first-year value", () => {
@@ -117,7 +127,10 @@ describe("guardrails", () => {
 
   it("flags a price below the cost floor", () => {
     const proj = tritenExample();
-    const broken = { ...proj, pricing: { ...proj.pricing, tiers: [{ name: "Lowball", price: 5000 }] } };
+    const broken = {
+      ...proj,
+      pricing: { ...proj.pricing, tiers: [{ name: "Lowball", price: 5000 }] },
+    };
     const { warnings } = analyzeProject(broken);
     expect(warnings.some((w) => w.rule === "below-floor" && w.severity === "error")).toBe(true);
   });
@@ -125,5 +138,35 @@ describe("guardrails", () => {
   it("warns when there are no value inputs (empty default project)", () => {
     const { warnings } = analyzeProject(createDefaultProject());
     expect(warnings.some((w) => w.rule === "no-value-inputs")).toBe(true);
+  });
+
+  it("rejects paid discovery/scoping as the lead tier", () => {
+    const proj = tritenExample();
+    const broken = {
+      ...proj,
+      pricing: { ...proj.pricing, tiers: [{ name: "Discovery Sprint", price: 35_000 }] },
+    };
+    const { warnings } = analyzeProject(broken);
+    expect(warnings.some((w) => w.rule === "paid-discovery-lead" && w.severity === "error")).toBe(
+      true,
+    );
+  });
+
+  it("checks the first priced tier for paid discovery/scoping", () => {
+    const proj = tritenExample();
+    const broken = {
+      ...proj,
+      pricing: {
+        ...proj.pricing,
+        tiers: [
+          { name: "Future build", price: null },
+          { name: "Scoping Sprint", price: 35_000 },
+        ],
+      },
+    };
+    const { warnings } = analyzeProject(broken);
+    expect(warnings.some((w) => w.rule === "paid-discovery-lead" && w.severity === "error")).toBe(
+      true,
+    );
   });
 });

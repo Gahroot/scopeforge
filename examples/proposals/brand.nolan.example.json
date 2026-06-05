@@ -1,0 +1,20 @@
+{
+  "id": "nolan-custom",
+  "name": "Nolan Grout",
+  "legalName": "Nolan Grout",
+  "tagline": "AI systems, scoped honestly and built to pay back.",
+  "website": "https://nolango.com",
+  "email": "hello@nolango.com",
+  "phone": "+1 555 010 0123",
+  "logoText": "NG",
+  "colors": {
+    "primary": "#111827",
+    "secondary": "#334155",
+    "accent": "#2563eb",
+    "background": "#f8fafc",
+    "surface": "#ffffff",
+    "text": "#111827",
+    "mutedText": "#64748b",
+    "border": "#dbe3ef"
+  }
+}

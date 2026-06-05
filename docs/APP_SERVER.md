@@ -38,13 +38,13 @@ All routes are local-only by default, return `Cache-Control: no-store`, and do n
 | `/api/proposals/validate` | `POST` | Validate a `ProposalIntake`, `ProposalDraft`, `{ intake }`, or `{ draft }`. |
 | `/api/proposals/analyze` | `POST` | Validate and run deterministic analysis for a `Project`, proposal intake, or draft. |
 | `/api/proposals/preview` | `POST` | Render proposal HTML from reviewed structured input. |
-| `/api/proposals/export-pdf` | `POST` | Render HTML and return a PDF response from server-side Playwright. |
+| `/api/proposals/export-pdf` | `POST` | Validate draft/intake + template + brand, render HTML, and return a PDF response from server-side Playwright. |
 | `/api/agent/messages` | `POST` | Reserved placeholder for future local model calls. |
 | `/api/brand/from-website` | `POST` | Reserved placeholder for future server-side website brand extraction. |
 
-Preview/PDF requests accept options such as `brand` or `brandId`, `audience` (`client` or `internal`), `seed`, `iterations`, and `generatedAt`. Client-audience preview and export block on guardrail errors; use `audience: "internal"` only for local review.
+Preview/PDF requests accept a `ProposalIntake`, `ProposalDraft`, `{ intake }`, or `{ draft }` plus options such as `templateId` (`generic/value-proposal` or `generic/scope-review`), `brand` or `brandId`, `audience` (`client` or `internal`), `seed`, `iterations`, `generatedAt`, and PDF `fileName`/`format`. Client-audience preview and export block on guardrail errors; use `audience: "internal"` only for local review.
 
-PDF export uses Playwright Chromium. If Chromium is missing, install it once:
+PDF export uses Playwright Chromium. If Chromium is missing, the API returns `chromium_missing` with the install command. Install it once:
 
 ```bash
 npx playwright install chromium

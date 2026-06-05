@@ -3,7 +3,7 @@
  * These live in the CORE so no UI screen can bypass them.
  */
 
-import type { CostResult, Project, PricingResult, ValueResult, Warning } from "./types.js";
+import type { CostResult, Project, PricingResult, Tier, ValueResult, Warning } from "./types.js";
 import { leadPrice } from "./pricing.js";
 
 export function checkGuardrails(
@@ -26,11 +26,15 @@ export function checkGuardrails(
   }
 
   // Rule 2/3 — future upside must never be inside year-one value.
-  if (value.yearOne.high >= value.theoreticalAnnual + value.futureUpside.high && value.futureUpside.high > 0) {
+  if (
+    value.yearOne.high >= value.theoreticalAnnual + value.futureUpside.high &&
+    value.futureUpside.high > 0
+  ) {
     w.push({
       rule: "future-leak",
       severity: "warning",
-      message: "Year-1 value looks inflated by future upside. Keep avoided hires/replaced spend out of payback.",
+      message:
+        "Year-1 value looks inflated by future upside. Keep avoided hires/replaced spend out of payback.",
     });
   }
 
@@ -58,7 +62,19 @@ export function checkGuardrails(
     w.push({
       rule: "floor-exceeds-value",
       severity: "warning",
-      message: "Cost floor exceeds first-year value. Split into phases or trim scope.",
+      message:
+        "Cost floor exceeds first-year value. Split into outcome-based phases or trim scope.",
+    });
+  }
+
+  // Selling paid discovery/scoping as the lead tier is explicitly not the model.
+  const leadTier = firstPricedTier(project.pricing.tiers);
+  if (leadTier !== null && isPaidDiscoveryLead(leadTier.name)) {
+    w.push({
+      rule: "paid-discovery-lead",
+      severity: "error",
+      message:
+        "Lead tier looks like paid discovery/scoping. Price an outcome-based pilot or build instead.",
     });
   }
 
@@ -91,4 +107,19 @@ function approx(a: number, b: number): boolean {
 
 function money(n: number): string {
   return `$${Math.round(n).toLocaleString("en-US")}`;
+}
+
+function firstPricedTier(tiers: readonly Tier[]): Tier | null {
+  for (const tier of tiers) if (tier.price !== null) return tier;
+  return null;
+}
+
+function isPaidDiscoveryLead(name: string): boolean {
+  const normalized = name.toLowerCase();
+  return (
+    normalized.includes("discovery sprint") ||
+    normalized.includes("scoping sprint") ||
+    normalized.includes("scope sprint") ||
+    normalized.includes("paid discovery")
+  );
 }

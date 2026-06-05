@@ -95,25 +95,33 @@ describe("server API routes", () => {
 
   it("analyzes draft pricing phases as the source of truth", async () => {
     const draft = proposalIntakeToDraft(sampleIntake);
-    const unpricedDraft = {
+    const firstPhase = draft.pricing.phases[0];
+    const secondPhase = draft.pricing.phases[1];
+    if (firstPhase === undefined || secondPhase === undefined) {
+      throw new Error("Sample draft must include two pricing phases.");
+    }
+    const repricedDraft = {
       ...draft,
       pricing: {
         ...draft.pricing,
-        phases: draft.pricing.phases.map((phase) => ({ ...phase, price: null })),
+        phases: [
+          { ...firstPhase, price: null },
+          { ...secondPhase, price: 150_000 },
+        ],
       },
     };
 
     const response = await handleApiRoute({
       method: "POST",
       pathname: "/api/proposals/analyze",
-      body: { draft: unpricedDraft, iterations: 500 },
+      body: { draft: repricedDraft, iterations: 500 },
     });
     const json = expectJson(response);
     const analysis = readRecordField(json.body, "analysis");
     const pricing = readRecordField(analysis, "pricing");
 
     expect(json.status).toBe(200);
-    expect(pricing.paybackMonths).toBeNull();
+    expect(readNumberField(pricing, "paybackMonths")).toBeGreaterThan(12);
   });
 
   it("renders client-safe proposal HTML", async () => {
@@ -141,6 +149,7 @@ describe("server API routes", () => {
         pathname: "/api/proposals/export-pdf",
         body: {
           intake: sampleIntake,
+          templateId: "generic/value-proposal",
           brand: "nolan",
           audience: "client",
           iterations: 500,
@@ -161,6 +170,63 @@ describe("server API routes", () => {
     expect(binary.headers["Content-Type"]).toBe("application/pdf");
     expect(binary.headers["Content-Disposition"]).toBe('attachment; filename="Acme Proposal.pdf"');
     expect(renderedHtml).toContain("Acme Operations");
+  });
+
+  it("validates draft template selections before PDF export", async () => {
+    const draft = proposalIntakeToDraft(sampleIntake);
+
+    const response = await handleApiRoute({
+      method: "POST",
+      pathname: "/api/proposals/export-pdf",
+      body: {
+        draft,
+        templateId: "generic/scope-review",
+        brand: "nolan",
+        audience: "client",
+        iterations: 500,
+      },
+    });
+    const json = expectJson(response);
+
+    expect(json.status).toBe(422);
+    expect(json.body).toEqual(
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({ code: "template_mismatch" }),
+      }),
+    );
+  });
+
+  it("reports missing Chromium with the install command", async () => {
+    const response = await handleApiRoute(
+      {
+        method: "POST",
+        pathname: "/api/proposals/export-pdf",
+        body: {
+          intake: sampleIntake,
+          brand: "nolan",
+          audience: "client",
+          iterations: 500,
+        },
+      },
+      {
+        renderPdf: async () => {
+          throw new Error("Executable doesn't exist. Please run npx playwright install chromium");
+        },
+      },
+    );
+    const json = expectJson(response);
+
+    expect(json.status).toBe(503);
+    expect(json.body).toEqual(
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({
+          code: "chromium_missing",
+          message: expect.stringContaining("npx playwright install chromium"),
+        }),
+      }),
+    );
   });
 
   it("keeps future agent endpoints server-side and explicitly reserved", async () => {

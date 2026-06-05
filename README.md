@@ -18,6 +18,8 @@ npm install
 | `npm run build` | Type-check then produce the production build (`tsc && vite build`). |
 | `npm run test` | Run the Vitest suite once. |
 | `npm run typecheck` | Type-check without emitting (`tsc --noEmit`). |
+| `npm run proposal` | Generate proposal PDF/HTML from intake JSON. |
+| `npm run proposal:sample` | Generate the Triten sample proposal into `out/`. |
 
 `npm run test:watch` and `npm run preview` are also available.
 
@@ -91,9 +93,34 @@ Individual lens functions (`runCost`, `runValue`, `runPricing`),
 `checkGuardrails`, and helpers (`makeRng`, `triangular`, `percentile`,
 `percentiles`) are also re-exported from the same entry point.
 
-## Local app server
+ScopeForge is for pricing outcome-based pilots/builds, not selling paid
+"discovery" or "scoping" sprints as the lead offer. The guardrails flag lead
+tiers that look like paid discovery so the first paid engagement stays tied to a
+client-visible result.
 
-Run `npm run app:dev` to start the local Node server at `http://127.0.0.1:4174` with Vite mounted behind it, so the UI and `/api/*` JSON routes share one secret-free origin. For built assets, run `npm run build` and then `npm run app:server`. See [docs/APP_SERVER.md](docs/APP_SERVER.md) for route details and PDF export notes.
+## Proposal generation
+
+Use the local proposal workflow when you have structured intake JSON from a
+meeting-summary AI or manual scoping pass:
+
+```bash
+npm run app:dev
+npm run proposal -- --input examples/proposals/triten-intake.json --brand nolan --out out/triten-proposal.pdf --html out/triten-proposal.html
+```
+
+The browser app previews branded HTML, validates missing scope/value/pricing
+inputs, downloads HTML, and calls the local Node `/api/proposals/export-pdf`
+route from **Download PDF**. Open the app-server URL from `npm run app:dev`
+instead of the Vite-only URL when exporting PDFs. The browser API and CLI both
+render with Playwright Chromium; if Chromium is missing, run
+`npx playwright install chromium` once.
+
+Detailed docs:
+
+- [Local app server](docs/APP_SERVER.md)
+- [Proposal generation workflow](docs/PROPOSAL_GENERATION.md)
+- [Conversational proposal target flow](docs/CONVERSATIONAL_PROPOSALS.md)
+- [Meeting summary to proposal-intake prompt](docs/MEETING_SUMMARY_TO_PROPOSAL_PROMPT.md)
 
 ## Target conversational flow
 
@@ -107,9 +134,7 @@ secret-free.
 From a fixed draft, ScopeForge runs the deterministic sequence:
 `validate → analyzeProject(seed, iterations) → render HTML → export PDF`. Client
 exports block on guardrail errors and omit internal cost floors, margins, risk
-pads, raw prompts, and unreviewed website claims. See
-[docs/CONVERSATIONAL_PROPOSALS.md](docs/CONVERSATIONAL_PROPOSALS.md) for the
-implementer details.
+pads, raw prompts, and unreviewed website claims.
 
 ## Architecture
 

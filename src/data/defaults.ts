@@ -39,11 +39,36 @@ export function tritenExample(): Project {
       blendedRate: { optimistic: 120, likely: 150, pessimistic: 185 },
       margin: 0.4,
       workstreams: [
-        { name: "Discovery + data model", hours: { optimistic: 18, likely: 28, pessimistic: 45 }, aiFactor: 1, judgment: true },
-        { name: "Data layer + ingestion (Power BI + Monday)", hours: { optimistic: 20, likely: 34, pessimistic: 55 }, aiFactor: 0.55, judgment: false },
-        { name: "MCP server + Q&A", hours: { optimistic: 24, likely: 38, pessimistic: 62 }, aiFactor: 0.55, judgment: false },
-        { name: "QA + reconciliation", hours: { optimistic: 14, likely: 22, pessimistic: 38 }, aiFactor: 1, judgment: true },
-        { name: "Docs + handoff", hours: { optimistic: 8, likely: 13, pessimistic: 22 }, aiFactor: 0.55, judgment: false },
+        {
+          name: "Discovery + data model",
+          hours: { optimistic: 18, likely: 28, pessimistic: 45 },
+          aiFactor: 1,
+          judgment: true,
+        },
+        {
+          name: "Data layer + ingestion (Power BI + Monday)",
+          hours: { optimistic: 20, likely: 34, pessimistic: 55 },
+          aiFactor: 0.55,
+          judgment: false,
+        },
+        {
+          name: "MCP server + Q&A",
+          hours: { optimistic: 24, likely: 38, pessimistic: 62 },
+          aiFactor: 0.55,
+          judgment: false,
+        },
+        {
+          name: "QA + reconciliation",
+          hours: { optimistic: 14, likely: 22, pessimistic: 38 },
+          aiFactor: 1,
+          judgment: true,
+        },
+        {
+          name: "Docs + handoff",
+          hours: { optimistic: 8, likely: 13, pessimistic: 22 },
+          aiFactor: 0.55,
+          judgment: false,
+        },
       ],
     },
     value: {

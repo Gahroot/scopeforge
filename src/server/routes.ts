@@ -4,6 +4,7 @@ import { resolveBrand, validateProposalBrand } from "../proposal/brands.js";
 import { proposalIntakeToDraft } from "../proposal/draftStore.js";
 import { getClientBlockingWarnings } from "../proposal/model.js";
 import {
+  PROPOSAL_DRAFT_TEMPLATE_IDS,
   proposalDraftToIntake,
   validateProposalDraft,
   validateProposalIntake,
@@ -12,14 +13,17 @@ import type {
   ProposalAudience,
   ProposalBrand,
   ProposalDraft,
+  ProposalDraftTemplateId,
   ProposalIntake,
   ProposalValidationError,
 } from "../proposal/types.js";
+import { isMissingChromiumError, renderProposalPdfBytes } from "../render/pdf.node.js";
 import { renderValueProposalHtml } from "../render/valueProposalHtml.js";
 
 const API_PREFIX = "/api";
 const DEFAULT_BRAND_ID = "nolan";
 const DEFAULT_PDF_FORMAT = "Letter";
+const DEFAULT_TEMPLATE_ID = "generic/value-proposal" satisfies ProposalDraftTemplateId;
 const MAX_ITERATIONS = 250_000;
 
 export interface AppRouteRequest {
@@ -69,6 +73,7 @@ interface ResolvedProposalDocument {
   readonly draft: ProposalDraft;
   readonly intake: ProposalIntake;
   readonly project: Project;
+  readonly templateId: ProposalDraftTemplateId;
 }
 
 interface ProposalRenderBundle {
@@ -132,34 +137,12 @@ export async function handleApiRoute(
 export async function renderPdfWithPlaywright(
   request: ProposalPdfRenderRequest,
 ): Promise<ProposalPdfRenderResult> {
-  throwIfAborted(request.signal);
-  const { chromium } = await import("playwright");
-  const browser = await chromium.launch({ headless: true }).catch((error: unknown) => {
-    throw withChromiumInstallHint(error);
+  const pdf = await renderProposalPdfBytes({
+    html: request.html,
+    format: request.format,
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
   });
-
-  try {
-    throwIfAborted(request.signal);
-    const page = await browser.newPage();
-    await page.setContent(request.html, { waitUntil: "networkidle" });
-    throwIfAborted(request.signal);
-    const bytes = await page.pdf({
-      format: request.format,
-      margin: {
-        top: "0in",
-        right: "0in",
-        bottom: "0in",
-        left: "0in",
-      },
-      preferCSSPageSize: true,
-      printBackground: true,
-      tagged: true,
-    });
-
-    return { bytes, format: request.format };
-  } finally {
-    await browser.close();
-  }
+  return { bytes: pdf.bytes, format: pdf.format };
 }
 
 function healthResponse(): ApiRouteResponse {
@@ -204,6 +187,7 @@ function validateProposalResponse(input: unknown): ApiRouteResponse {
   return jsonResponse(200, {
     ok: true,
     kind: candidate.value.kind,
+    templateId: candidate.value.templateId,
   });
 }
 
@@ -240,6 +224,7 @@ function previewProposalResponse(input: unknown): ApiRouteResponse {
   return jsonResponse(200, {
     ok: true,
     kind: bundle.value.proposal.kind,
+    templateId: bundle.value.proposal.templateId,
     audience: bundle.value.audience,
     brand: bundle.value.brand,
     analysis,
@@ -295,11 +280,7 @@ async function exportProposalPdfResponse(
       body: pdf.bytes,
     };
   } catch (error) {
-    return failureResponse(
-      503,
-      "pdf_render_failed",
-      error instanceof Error ? error.message : String(error),
-    );
+    return pdfRenderFailureResponse(error);
   }
 }
 
@@ -339,10 +320,28 @@ function buildProposalRenderBundle(input: unknown): RouteValueResult<ProposalRen
 }
 
 function resolveProposalDocument(input: unknown): RouteValueResult<ResolvedProposalDocument> {
+  const requestedTemplateId = resolveRequestedTemplateId(input);
+  if (!requestedTemplateId.ok) return requestedTemplateId;
+
   const candidate = unwrapProposalCandidate(input);
   if (candidate.kind === "draft") {
     const result = validateProposalDraft(candidate.value);
     if (!result.ok) return validationFailureResult("Proposal draft is invalid.", result.errors);
+
+    const templateId = requestedTemplateId.value ?? firstDraftTemplateId(result.value);
+    if (!result.value.templateIds.some((id) => id === templateId)) {
+      return routeFailure(
+        failureResponse(
+          422,
+          "template_mismatch",
+          "templateId must match one of the validated draft templateIds.",
+          [
+            `templateId: ${templateId}`,
+            `draft.templateIds: ${result.value.templateIds.join(", ")}`,
+          ],
+        ),
+      );
+    }
 
     const intake = proposalDraftToIntake(result.value);
     return {
@@ -352,6 +351,7 @@ function resolveProposalDocument(input: unknown): RouteValueResult<ResolvedPropo
         draft: result.value,
         intake,
         project: intake.project,
+        templateId,
       },
     };
   }
@@ -359,37 +359,35 @@ function resolveProposalDocument(input: unknown): RouteValueResult<ResolvedPropo
   const result = validateProposalIntake(candidate.value);
   if (!result.ok) return validationFailureResult("Proposal intake is invalid.", result.errors);
 
+  const templateId = requestedTemplateId.value ?? DEFAULT_TEMPLATE_ID;
+  const draft = proposalIntakeToDraft(result.value, { templateId });
   return {
     ok: true,
     value: {
       kind: "intake",
-      draft: proposalIntakeToDraft(result.value),
+      draft,
       intake: result.value,
       project: result.value.project,
+      templateId,
     },
   };
 }
 
 function resolveProjectInput(input: unknown): RouteValueResult<Project> {
-  const proposal = tryResolveProposalDocument(input);
-  if (proposal.ok) return { ok: true, value: proposal.value.project };
+  if (
+    looksLikeProposalEnvelope(input) ||
+    looksLikeProposalDraft(input) ||
+    looksLikeProposalIntake(input)
+  ) {
+    const proposal = resolveProposalDocument(input);
+    if (!proposal.ok) return proposal;
+    return { ok: true, value: proposal.value.project };
+  }
 
   const candidate = unwrapProjectCandidate(input);
   const result = validateProject(candidate);
   if (!result.ok) return validationFailureResult("Project input is invalid.", result.errors);
   return { ok: true, value: result.value };
-}
-
-function tryResolveProposalDocument(input: unknown): RouteValueResult<ResolvedProposalDocument> {
-  if (
-    !looksLikeProposalEnvelope(input) &&
-    !looksLikeProposalDraft(input) &&
-    !looksLikeProposalIntake(input)
-  ) {
-    return routeFailure(failureResponse(422, "proposal_invalid", "Proposal input is invalid."));
-  }
-
-  return resolveProposalDocument(input);
 }
 
 function unwrapProposalCandidate(input: unknown): {
@@ -445,6 +443,40 @@ function resolveBuiltInBrand(brandId: string): ProposalBrand {
   const brand = resolveBrand(brandId);
   if (brand === null) throw new Error(`Built-in brand was not registered: ${brandId}`);
   return brand;
+}
+
+function resolveRequestedTemplateId(
+  input: unknown,
+): RouteValueResult<ProposalDraftTemplateId | undefined> {
+  const rawTemplateId =
+    readOptionalUnknown(input, "templateId") ?? readOptionalUnknown(input, "template");
+  if (rawTemplateId === undefined) return { ok: true, value: undefined };
+  if (typeof rawTemplateId !== "string") {
+    return routeFailure(
+      failureResponse(400, "template_invalid", "templateId must be a supported template id."),
+    );
+  }
+
+  const trimmed = rawTemplateId.trim();
+  if (!isProposalDraftTemplateId(trimmed)) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "template_invalid",
+        `templateId must be one of: ${PROPOSAL_DRAFT_TEMPLATE_IDS.join(", ")}.`,
+      ),
+    );
+  }
+
+  return { ok: true, value: trimmed };
+}
+
+function firstDraftTemplateId(draft: ProposalDraft): ProposalDraftTemplateId {
+  return draft.templateIds[0] ?? DEFAULT_TEMPLATE_ID;
+}
+
+function isProposalDraftTemplateId(input: string): input is ProposalDraftTemplateId {
+  return PROPOSAL_DRAFT_TEMPLATE_IDS.some((id) => id === input);
 }
 
 function resolveAudience(input: unknown): RouteValueResult<ProposalAudience> {
@@ -636,30 +668,18 @@ function sanitizePdfFileName(input: string): string {
   return withExtension.replace(/["\\]/g, "-");
 }
 
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted !== true) return;
-  throw new Error("Request was aborted.");
-}
-
-function withChromiumInstallHint(error: unknown): Error {
-  if (!isMissingChromiumError(error)) {
-    return error instanceof Error ? error : new Error(String(error));
+function pdfRenderFailureResponse(error: unknown): ApiRouteResponse {
+  const message = error instanceof Error ? error.message : String(error);
+  if (isMissingChromiumError(error)) {
+    return failureResponse(
+      503,
+      "chromium_missing",
+      "Playwright Chromium is not installed. Run `npx playwright install chromium` from the project root, then try Download PDF again.",
+      [message],
+    );
   }
 
-  const originalMessage = error instanceof Error ? error.message : String(error);
-  return new Error(
-    `Playwright Chromium is not installed. Run this once from the project root: npx playwright install chromium\n\nOriginal error:\n${originalMessage}`,
-  );
-}
-
-function isMissingChromiumError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("executable doesn't exist") ||
-    normalized.includes("browser executable") ||
-    (normalized.includes("playwright") && normalized.includes("install"))
-  );
+  return failureResponse(503, "pdf_render_failed", message);
 }
 
 function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {

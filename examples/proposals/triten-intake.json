@@ -1,0 +1,284 @@
+{
+  "project": {
+    "project": "Triten AI Portfolio Intelligence Pilot",
+    "client": {
+      "sizeHeadcount": 45,
+      "buyerRole": "COO",
+      "workingWeeks": 46
+    },
+    "cost": {
+      "blendedRate": {
+        "optimistic": 120,
+        "likely": 150,
+        "pessimistic": 185
+      },
+      "margin": 0.4,
+      "workstreams": [
+        {
+          "name": "Discovery + data model",
+          "hours": {
+            "optimistic": 18,
+            "likely": 28,
+            "pessimistic": 45
+          },
+          "aiFactor": 1,
+          "judgment": true
+        },
+        {
+          "name": "Data layer + ingestion (Power BI + Monday)",
+          "hours": {
+            "optimistic": 20,
+            "likely": 34,
+            "pessimistic": 55
+          },
+          "aiFactor": 0.55,
+          "judgment": false
+        },
+        {
+          "name": "MCP server + Q&A",
+          "hours": {
+            "optimistic": 24,
+            "likely": 38,
+            "pessimistic": 62
+          },
+          "aiFactor": 0.55,
+          "judgment": false
+        },
+        {
+          "name": "QA + reconciliation",
+          "hours": {
+            "optimistic": 14,
+            "likely": 22,
+            "pessimistic": 38
+          },
+          "aiFactor": 1,
+          "judgment": true
+        },
+        {
+          "name": "Docs + handoff",
+          "hours": {
+            "optimistic": 8,
+            "likely": 13,
+            "pessimistic": 22
+          },
+          "aiFactor": 0.55,
+          "judgment": false
+        }
+      ]
+    },
+    "value": {
+      "realizationFactor": {
+        "low": 0.45,
+        "high": 0.55
+      },
+      "segments": [
+        {
+          "role": "Analysts & associates",
+          "headcount": 7,
+          "hoursPerWeek": 2.5,
+          "loadedRate": 75
+        },
+        {
+          "role": "Asset managers & PMs",
+          "headcount": 6,
+          "hoursPerWeek": 2,
+          "loadedRate": 85
+        },
+        {
+          "role": "Internal finance & ops",
+          "headcount": 5,
+          "hoursPerWeek": 1.5,
+          "loadedRate": 70
+        },
+        {
+          "role": "Execs & principals",
+          "headcount": 4,
+          "hoursPerWeek": 1,
+          "loadedRate": 175
+        }
+      ],
+      "workflows": [
+        {
+          "name": "Investor-report assembly",
+          "low": 5000,
+          "high": 15000
+        },
+        {
+          "name": "Underwriting metric extraction",
+          "low": 15000,
+          "high": 30000
+        },
+        {
+          "name": "Pipeline & inspection entry",
+          "low": 10000,
+          "high": 20000
+        }
+      ],
+      "futureUpside": [
+        {
+          "name": "Avoided analyst hire",
+          "low": 80000,
+          "high": 120000,
+          "note": "later phase"
+        },
+        {
+          "name": "Accounting automation",
+          "low": 60000,
+          "high": 120000,
+          "note": "future phase"
+        }
+      ]
+    },
+    "pricing": {
+      "valueFraction": {
+        "low": 0.1,
+        "high": 0.2
+      },
+      "tiers": [
+        {
+          "name": "Pilot Build",
+          "price": 40000
+        },
+        {
+          "name": "Phase 2 — AI Agent + Workflows",
+          "price": null,
+          "note": "Scoped after the pilot"
+        }
+      ]
+    }
+  },
+  "preparedFor": {
+    "companyName": "Triten Real Estate Partners",
+    "buyerName": "Triten Leadership Team",
+    "buyerTitle": "COO",
+    "website": "https://triten.com",
+    "logoText": "TRITEN",
+    "accentColor": "#0f766e"
+  },
+  "details": {
+    "title": "AI Portfolio Intelligence Pilot",
+    "subtitle": "A focused pilot to unify Monday.com, Power BI, and portfolio operating context into a trusted Q&A layer.",
+    "date": "June 5, 2026",
+    "recommendation": "Start with the $40K pilot build to prove trusted portfolio answers before expanding into AI agents and workflow automation.",
+    "executiveSummary": [
+      "Triten has enough recurring reporting, lookup, and cross-system context-switching pain to justify a focused AI data pilot.",
+      "The strongest first move is not a broad automation program; it is a reliable operating foundation that answers high-value portfolio questions from governed sources.",
+      "The pilot is scoped to pay back on conservative year-one time savings while preserving larger avoided-hire and accounting-automation upside for later phases."
+    ],
+    "whatWeHeard": [
+      "Teams lose time assembling investor-reporting context, extracting underwriting metrics, and keeping pipeline or inspection updates aligned across systems.",
+      "Leadership wants faster answers without creating another ungoverned reporting surface or relying on unsupported manual reconciliation.",
+      "Power BI and Monday.com are important existing surfaces, so the pilot should connect to current operating systems instead of replacing them."
+    ],
+    "investmentSummary": "The recommended pilot is priced at $40K against an expected year-one value band of roughly $100K–$170K, with conservative payback under six months.",
+    "timelineSummary": "The pilot is designed as a short, sequenced engagement: source mapping, data foundation, Q&A build, then QA and handoff."
+  },
+  "scope": [
+    {
+      "title": "Source mapping and pilot question design",
+      "description": "Confirm the highest-value pilot questions, source owners, refresh expectations, and reconciliation checkpoints before building the AI layer.",
+      "deliverables": [
+        "Pilot question backlog",
+        "Source-system map for Power BI and Monday.com",
+        "Data ownership and access checklist"
+      ],
+      "outcomes": [
+        "The pilot starts from concrete operating questions rather than generic AI demos.",
+        "Data access and ownership risks are surfaced before build work accelerates."
+      ]
+    },
+    {
+      "title": "Data foundation and ingestion",
+      "description": "Create the trusted data layer needed to answer portfolio and operating questions from current systems.",
+      "deliverables": [
+        "Power BI and Monday.com ingestion path",
+        "Normalized pilot data model",
+        "Reconciliation checks for key fields"
+      ],
+      "outcomes": [
+        "One governed foundation for pilot Q&A.",
+        "Reduced manual lookup and report assembly for recurring operating questions."
+      ]
+    },
+    {
+      "title": "MCP server and Q&A experience",
+      "description": "Build the pilot interface and tool layer that lets authorized users ask high-value questions over governed portfolio context.",
+      "deliverables": [
+        "MCP server for approved pilot data access",
+        "Q&A workflow for priority operating questions",
+        "Prompt and response guardrails for pilot use cases"
+      ],
+      "outcomes": [
+        "Leadership and operators can get faster answers from trusted sources.",
+        "The team has a concrete foundation for later workflow agents."
+      ]
+    },
+    {
+      "title": "QA, documentation, and handoff",
+      "description": "Reconcile outputs, document the operating model, and hand off the pilot so Triten can evaluate the next phase confidently.",
+      "deliverables": [
+        "QA and reconciliation report",
+        "Admin and user handoff documentation",
+        "Phase 2 opportunity backlog"
+      ],
+      "outcomes": [
+        "The pilot is reviewed for accuracy before broader rollout.",
+        "The next phase is scoped from evidence instead of assumptions."
+      ]
+    }
+  ],
+  "milestones": [
+    {
+      "name": "Kickoff and source map",
+      "timing": "Week 1",
+      "outcomes": [
+        "Confirm pilot questions, source owners, and access requirements.",
+        "Lock the data fields needed for the first Q&A workflows."
+      ]
+    },
+    {
+      "name": "Data foundation build",
+      "timing": "Weeks 2–3",
+      "outcomes": [
+        "Connect and normalize priority Power BI and Monday.com context.",
+        "Validate reconciliation checks with Triten stakeholders."
+      ]
+    },
+    {
+      "name": "Q&A layer and pilot workflows",
+      "timing": "Weeks 3–4",
+      "outcomes": [
+        "Deliver the MCP-backed pilot Q&A experience.",
+        "Test the highest-value investor reporting, underwriting, and pipeline questions."
+      ]
+    },
+    {
+      "name": "QA, handoff, and Phase 2 plan",
+      "timing": "Week 5",
+      "outcomes": [
+        "Complete QA, documentation, and owner training.",
+        "Prioritize the next AI agent and workflow automation opportunities."
+      ]
+    }
+  ],
+  "assumptions": [
+    "Triten provides timely access to the relevant Power BI workspace, Monday.com boards, and source-system owners.",
+    "Pilot users are available for working sessions, data validation, and Q&A acceptance testing.",
+    "The pilot focuses on a bounded set of portfolio intelligence questions rather than every downstream accounting or reporting workflow."
+  ],
+  "exclusions": [
+    "Full accounting automation and avoided-hire realization are deferred to a later phase.",
+    "Production rollout to all possible users is outside the pilot unless added through a change order.",
+    "New enterprise data warehouse procurement or major source-system replacement is not included."
+  ],
+  "clientInputs": [
+    "Power BI workspace access and an owner for report/data model questions.",
+    "Monday.com board access and an owner for workflow/pipeline questions.",
+    "A prioritized list of pilot questions and acceptance criteria from the leadership team."
+  ],
+  "nextSteps": [
+    "Approve the pilot investment and scope.",
+    "Schedule kickoff with source-system owners and pilot decision-makers.",
+    "Confirm data access, security expectations, and the initial pilot question backlog."
+  ]
+}
