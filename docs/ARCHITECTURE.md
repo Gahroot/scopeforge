@@ -70,6 +70,11 @@ See [`CONVERSATIONAL_PROPOSALS.md`](CONVERSATIONAL_PROPOSALS.md) for implementer
 - Browser UI should drive chat, draft editing, validation, and preview.
 - It should never hold AI provider secrets or perform privileged website/PDF work.
 
+### `server/` — local Node bridge
+- `appServer.ts` serves the built UI or mounts Vite middleware in development.
+- `routes.ts` owns JSON APIs for proposal validation, analysis, HTML preview, PDF export, and reserved agent/brand endpoints.
+- Browser code calls `/api/*`; provider credentials, website fetching, draft files, and Playwright stay server-side.
+
 ### Local Node agent service — target outer shell
 - Owns AI/model calls, website-derived brand profiles, draft file persistence, and exports.
 - Returns typed JSON patches/results to the UI; expected failures surface as validation errors.

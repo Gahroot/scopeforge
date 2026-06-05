@@ -13,6 +13,8 @@ npm install
 | Command | Description |
 | --- | --- |
 | `npm run dev` | Start the Vite dev server. |
+| `npm run app:dev` | Start the local Node app server with Vite mounted behind it. |
+| `npm run app:server` | Serve the built Vite UI from `dist/` with local API routes. |
 | `npm run build` | Type-check then produce the production build (`tsc && vite build`). |
 | `npm run test` | Run the Vitest suite once. |
 | `npm run typecheck` | Type-check without emitting (`tsc --noEmit`). |
@@ -88,6 +90,10 @@ console.log(analysis.warnings);
 Individual lens functions (`runCost`, `runValue`, `runPricing`),
 `checkGuardrails`, and helpers (`makeRng`, `triangular`, `percentile`,
 `percentiles`) are also re-exported from the same entry point.
+
+## Local app server
+
+Run `npm run app:dev` to start the local Node server at `http://127.0.0.1:4174` with Vite mounted behind it, so the UI and `/api/*` JSON routes share one secret-free origin. For built assets, run `npm run build` and then `npm run app:server`. See [docs/APP_SERVER.md](docs/APP_SERVER.md) for route details and PDF export notes.
 
 ## Target conversational flow
 
