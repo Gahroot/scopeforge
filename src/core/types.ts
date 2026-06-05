@@ -49,6 +49,18 @@ export interface NamedRange {
   readonly note?: string;
 }
 
+/**
+ * One year of the multi-year savings ramp (e.g. Year 1 $150–180K, Year 2 $200K+,
+ * Year 3 $275–325K+). `low`/`high` express the recurring-savings band for that year;
+ * an open-ended target ("$200K+") is modelled as `low === high`.
+ */
+export interface RampYear {
+  readonly year: number;
+  readonly low: number;
+  readonly high: number;
+  readonly label?: string;
+}
+
 /** Lens B inputs — what it's worth to them in year one. */
 export interface ValueModel {
   /** Fraction of theoretical saved time actually captured in year 1, as [low, high]. */
@@ -57,12 +69,49 @@ export interface ValueModel {
   readonly workflows: readonly NamedRange[];
   /** Avoided hires, replaced spend, throughput — shown but NEVER in payback. */
   readonly futureUpside: readonly NamedRange[];
+  /** Multi-year recurring-savings ramp. Year 1 is the grounded base; later years compound. */
+  readonly ramp?: readonly RampYear[];
 }
 
-/** A pricing tier. `price === null` means intentionally unpriced ("scoped later"). */
+/**
+ * A pricing tier. `price === null` means intentionally unpriced ("scoped later").
+ * `price` is always the NET amount the client pays. When a discount applies, the
+ * gross→discount→net chain is captured by `standardPrice` and `discountPct`.
+ */
 export interface Tier {
   readonly name: string;
+  /** Net price the client actually pays. `null` = intentionally unpriced. */
   readonly price: number | null;
+  /** Gross / list price before any discount. */
+  readonly standardPrice?: number;
+  /** Discount applied to `standardPrice`, as a fraction in [0,1) (e.g. 0.33). */
+  readonly discountPct?: number;
+  /** Whether this tier is paid up front. */
+  readonly paidUpFront?: boolean;
+  readonly note?: string;
+}
+
+/**
+ * A delivery phase as a first-class object. `status` reflects pricing certainty:
+ * `fixed` = committed price, `estimated` = ballpark pending scope, `open` = deliberately
+ * unpriced. `price === null` pairs with `status: "open"`.
+ */
+export interface Phase {
+  readonly name: string;
+  readonly status: "fixed" | "estimated" | "open";
+  readonly price: number | null;
+  readonly deliverables: readonly string[];
+  readonly note?: string;
+}
+
+/** Recurring / ongoing engagement terms beyond the one-off build price. */
+export interface Terms {
+  /** Continuous support retainer, $/month. */
+  readonly supportMonthly?: number;
+  /** Post-launch support included at no extra cost, in days. */
+  readonly supportIncludedDays?: number;
+  /** Whether usage / licenses are billed separately from the build and support. */
+  readonly usageBilledSeparately?: boolean;
   readonly note?: string;
 }
 
@@ -71,6 +120,10 @@ export interface PricingModel {
   /** Anchor band as fraction of first-year value, e.g. [0.10, 0.20]. */
   readonly valueFraction: Range;
   readonly tiers: readonly Tier[];
+  /** Delivery phases as first-class objects (fixed / estimated / open). */
+  readonly phases?: readonly Phase[];
+  /** Recurring engagement terms (support retainer, included support, usage billing). */
+  readonly terms?: Terms;
 }
 
 export interface ClientContext {
