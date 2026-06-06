@@ -4,6 +4,9 @@
   "description": "Turns a vague build request into a defensible, honest scope and price. Three-lens model: cost floor, value ceiling, market reconciliation.",
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "scopeforge": "./dist/cli/main.js"
+  },
   "engines": {
     "node": ">=24"
   },
@@ -11,7 +14,7 @@
     "dev": "vite",
     "app:dev": "tsx src/server/appServer.ts --dev-ui",
     "app:server": "tsx src/server/appServer.ts",
-    "build": "tsc && vite build",
+    "build": "vite build && tsc",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -19,6 +22,7 @@
     "lint": "biome lint .",
     "format": "biome format --write .",
     "format:check": "biome format .",
+    "scope": "node dist/cli/main.js",
     "proposal": "tsx src/cli/proposal.ts",
     "proposal:sample": "npm run proposal -- --input examples/proposals/triten-intake.json --brand nolan --out out/triten-proposal.pdf --html out/triten-proposal.html"
   },
