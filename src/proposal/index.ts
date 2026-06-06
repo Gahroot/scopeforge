@@ -1,6 +1,8 @@
 export type {
   InternalProposalAppendix,
+  NarrativeSection,
   PreparedFor,
+  Proposal,
   ProposalActualDeliverable,
   ProposalAudience,
   ProposalBrand,
@@ -16,6 +18,7 @@ export type {
   ProposalEconomicsView,
   ProposalFooter,
   ProposalIntake,
+  ProposalMeta,
   ProposalMilestone,
   ProposalPhaseDiscount,
   ProposalPricingPhase,
@@ -71,6 +74,7 @@ export {
 } from "./model.js";
 export {
   PROPOSAL_DRAFT_TEMPLATE_IDS,
+  parseProposal,
   proposalDraftToIntake,
   validateProposalDraft,
   validateProposalIntake,

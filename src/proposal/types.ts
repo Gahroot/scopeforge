@@ -224,3 +224,44 @@ export interface ProposalValidationError {
 export type ValidationResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly errors: readonly ProposalValidationError[] };
+
+// ---- Client-ready proposal document -----------------------------------------
+//
+// A `Proposal` wraps the computed `Analysis` together with the hand-authored
+// narrative and metadata needed to render a client-facing document modeled on
+// the Triten value proposal. The engine produces the numbers; these types carry
+// the story around them.
+
+/** Cover/metadata block for the rendered document. */
+export interface ProposalMeta {
+  readonly vendor: string;
+  readonly recipient: string;
+  readonly engagement: string;
+  readonly date: string;
+  readonly confidential?: boolean;
+}
+
+/** A titled prose + bullet block. Either `body`, `bullets`, or both may appear. */
+export interface NarrativeSection {
+  readonly heading: string;
+  readonly body?: string;
+  readonly bullets?: readonly string[];
+}
+
+/**
+ * A complete, render-ready proposal: the computed `Analysis` plus the authored
+ * narrative that frames it for the client.
+ */
+export interface Proposal {
+  readonly meta: ProposalMeta;
+  readonly project: Project;
+  readonly analysis: Analysis;
+  readonly headline: {
+    readonly savingsTarget: string;
+    readonly payback: string;
+    readonly summary: string;
+  };
+  readonly unlocks: readonly NarrativeSection[];
+  readonly whatWeBuild: readonly NarrativeSection[];
+  readonly deliverables: readonly NarrativeSection[];
+}

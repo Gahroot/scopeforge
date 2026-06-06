@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { analyzeProject } from "../core/index.js";
 import { tritenExample } from "../data/defaults.js";
-import { proposalDraftToIntake, validateProposalDraft, validateProposalIntake } from "./schema.js";
-import type { ProposalDraft, ProposalIntake } from "./types.js";
+import {
+  parseProposal,
+  proposalDraftToIntake,
+  validateProposalDraft,
+  validateProposalIntake,
+} from "./schema.js";
+import type { Proposal, ProposalDraft, ProposalIntake } from "./types.js";
 
 describe("validateProposalIntake", () => {
   it("accepts a complete intake", () => {
@@ -211,6 +217,66 @@ describe("validateProposalDraft", () => {
     );
   });
 });
+
+describe("parseProposal", () => {
+  it("validates and returns a complete proposal document", () => {
+    const proposal = parseProposal(validProposal());
+
+    expect(proposal.meta.vendor).toBe("NolanGo");
+    expect(proposal.unlocks).toHaveLength(1);
+    expect(proposal.analysis.pricing.targetBand.low).toBeGreaterThan(0);
+  });
+
+  it("throws on a missing required field", () => {
+    const { meta: _meta, ...withoutMeta } = validProposal();
+
+    expect(() => parseProposal(withoutMeta)).toThrow();
+  });
+
+  it("throws on an empty heading in a narrative section", () => {
+    const proposal = validProposal();
+
+    expect(() =>
+      parseProposal({
+        ...proposal,
+        whatWeBuild: [{ heading: "", body: "x" }],
+      }),
+    ).toThrow();
+  });
+});
+
+function validProposal(): Proposal {
+  const project = tritenExample();
+  return {
+    meta: {
+      vendor: "NolanGo",
+      recipient: "Triten Real Estate Partners",
+      engagement: "AI Portfolio Intelligence Pilot",
+      date: "2026-06-05",
+      confidential: true,
+    },
+    project,
+    analysis: analyzeProject(project),
+    headline: {
+      savingsTarget: "$150K\u2013180K in year one",
+      payback: "Under six months",
+      summary: "A governed pilot that turns scattered context into trusted answers.",
+    },
+    unlocks: [
+      {
+        heading: "Trusted operating answers",
+        body: "A governed Q&A layer over approved portfolio context.",
+        bullets: ["Faster reporting cycles", "Fewer cross-system lookups"],
+      },
+    ],
+    whatWeBuild: [
+      { heading: "Data foundation", body: "Reconciled Power BI and Monday.com ingestion." },
+    ],
+    deliverables: [
+      { heading: "Pilot Q&A workflow", bullets: ["MCP-backed workflow", "Response guardrails"] },
+    ],
+  };
+}
 
 function validIntake(): ProposalIntake {
   return {

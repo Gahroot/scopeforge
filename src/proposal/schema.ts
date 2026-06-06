@@ -1,7 +1,9 @@
+import { z } from "zod";
 import type { Project, Range, Tier } from "../core/types.js";
 import { validateProject } from "../data/schema.js";
 import type {
   PreparedFor,
+  Proposal,
   ProposalActualDeliverable,
   ProposalBuildPlanStep,
   ProposalDetails,
@@ -781,4 +783,193 @@ function pricingPhaseNote(phase: ProposalPricingPhase): string | undefined {
 function buildPlanTimelineSummary(steps: readonly ProposalBuildPlanStep[]): string {
   if (steps.length === 0) return "Build-plan timing is confirmed during kickoff.";
   return steps.map((step) => `${step.timing}: ${step.name}`).join(" → ");
+}
+
+// ---- Proposal boundary schema (Zod) -----------------------------------------
+//
+// `parseProposal` validates a hand-authored `Proposal` document at the boundary
+// and throws on invalid input. A proposal bundles authored narrative with the
+// fully computed `Analysis`, so the schemas below mirror both the core engine
+// shapes and the document shapes from `./types.ts`.
+
+const nonEmptyString = z.string().min(1);
+
+// -- core/types.ts mirrors --
+
+const triEstimateSchema = z.object({
+  optimistic: z.number(),
+  likely: z.number(),
+  pessimistic: z.number(),
+});
+
+const rangeSchema = z.object({ low: z.number(), high: z.number() });
+
+const percentilesSchema = z.object({
+  p10: z.number(),
+  p50: z.number(),
+  p90: z.number(),
+});
+
+const workstreamSchema = z.object({
+  name: nonEmptyString,
+  hours: triEstimateSchema,
+  aiFactor: z.number(),
+  judgment: z.boolean(),
+});
+
+const costModelSchema = z.object({
+  blendedRate: triEstimateSchema,
+  margin: z.number(),
+  workstreams: z.array(workstreamSchema),
+});
+
+const roleSegmentSchema = z.object({
+  role: nonEmptyString,
+  headcount: z.number(),
+  hoursPerWeek: z.number(),
+  loadedRate: z.number(),
+});
+
+const namedRangeSchema = z.object({
+  name: nonEmptyString,
+  low: z.number(),
+  high: z.number(),
+  note: nonEmptyString.optional(),
+});
+
+const rampYearSchema = z.object({
+  year: z.number(),
+  low: z.number(),
+  high: z.number(),
+  label: nonEmptyString.optional(),
+});
+
+const valueModelSchema = z.object({
+  realizationFactor: rangeSchema,
+  segments: z.array(roleSegmentSchema),
+  workflows: z.array(namedRangeSchema),
+  futureUpside: z.array(namedRangeSchema),
+  ramp: z.array(rampYearSchema).optional(),
+});
+
+const tierSchema = z.object({
+  name: nonEmptyString,
+  price: z.number().nullable(),
+  standardPrice: z.number().optional(),
+  discountPct: z.number().optional(),
+  paidUpFront: z.boolean().optional(),
+  note: nonEmptyString.optional(),
+});
+
+const phaseSchema = z.object({
+  name: nonEmptyString,
+  status: z.enum(["fixed", "estimated", "open"]),
+  price: z.number().nullable(),
+  deliverables: z.array(nonEmptyString),
+  note: nonEmptyString.optional(),
+});
+
+const termsSchema = z.object({
+  supportMonthly: z.number().optional(),
+  supportIncludedDays: z.number().optional(),
+  usageBilledSeparately: z.boolean().optional(),
+  note: nonEmptyString.optional(),
+});
+
+const pricingModelSchema = z.object({
+  valueFraction: rangeSchema,
+  tiers: z.array(tierSchema),
+  phases: z.array(phaseSchema).optional(),
+  terms: termsSchema.optional(),
+});
+
+const clientContextSchema = z.object({
+  sizeHeadcount: z.number(),
+  buyerRole: nonEmptyString,
+  workingWeeks: z.number(),
+});
+
+const projectSchema = z.object({
+  project: nonEmptyString,
+  client: clientContextSchema,
+  cost: costModelSchema,
+  value: valueModelSchema,
+  pricing: pricingModelSchema,
+});
+
+const costResultSchema = z.object({
+  hours: percentilesSchema,
+  priceFloor: percentilesSchema,
+  riskAdjustedFloorP90: z.number(),
+});
+
+const valueResultSchema = z.object({
+  theoreticalAnnual: z.number(),
+  realizedTime: rangeSchema,
+  workflows: rangeSchema,
+  yearOne: rangeSchema,
+  futureUpside: rangeSchema,
+});
+
+const pricingResultSchema = z.object({
+  targetBand: rangeSchema,
+  paybackMonths: z.number().nullable(),
+});
+
+const warningSchema = z.object({
+  rule: nonEmptyString,
+  severity: z.enum(["error", "warning", "info"]),
+  message: nonEmptyString,
+});
+
+const analysisSchema = z.object({
+  cost: costResultSchema,
+  value: valueResultSchema,
+  pricing: pricingResultSchema,
+  warnings: z.array(warningSchema),
+});
+
+// -- ./types.ts proposal-document mirrors --
+
+const proposalMetaSchema = z.object({
+  vendor: nonEmptyString,
+  recipient: nonEmptyString,
+  engagement: nonEmptyString,
+  date: nonEmptyString,
+  confidential: z.boolean().optional(),
+});
+
+const narrativeSectionSchema = z.object({
+  heading: nonEmptyString,
+  body: nonEmptyString.optional(),
+  bullets: z.array(nonEmptyString).optional(),
+});
+
+const headlineSchema = z.object({
+  savingsTarget: nonEmptyString,
+  payback: nonEmptyString,
+  summary: nonEmptyString,
+});
+
+const proposalSchema = z.object({
+  meta: proposalMetaSchema,
+  project: projectSchema,
+  analysis: analysisSchema,
+  headline: headlineSchema,
+  unlocks: z.array(narrativeSectionSchema),
+  whatWeBuild: z.array(narrativeSectionSchema),
+  deliverables: z.array(narrativeSectionSchema),
+}) satisfies z.ZodType<unknown>;
+
+/**
+ * Validate a hand-authored proposal document at the boundary. Throws a
+ * `ZodError` on invalid input — this is authored content, so we fail fast.
+ *
+ * The Zod output is a structural superset of `Proposal` (mutable arrays and
+ * `T | undefined` optionals under `exactOptionalPropertyTypes`), so we narrow
+ * the validated value to the readonly domain type, mirroring the boundary cast
+ * used by `validateProject` in `../data/schema.ts`.
+ */
+export function parseProposal(input: unknown): Proposal {
+  return proposalSchema.parse(input) as Proposal;
 }
