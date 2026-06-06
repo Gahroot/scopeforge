@@ -4,7 +4,7 @@ import type { EnabledAgentConfig } from "./config.node.js";
 import { createProposalTools } from "./tools.node.js";
 import type { AgentSession } from "./session.node.js";
 
-const DEFAULT_MAX_TURNS = 12;
+export const DEFAULT_MAX_TURNS = 12;
 const DEFAULT_TEMPERATURE = 0.2;
 
 const SYSTEM_PROMPT = [
@@ -36,18 +36,26 @@ export interface BuildProposalAgentOptions {
   readonly session: AgentSession;
   readonly signal: AbortSignal;
   readonly priorMessages?: Message[];
+  /** Known vendor/client context appended to the system prompt so the agent skips those questions. */
+  readonly contextNote?: string;
+  /** Hard cap on agent turns for one prompt. Defaults to DEFAULT_MAX_TURNS. */
+  readonly maxTurns?: number;
 }
 
 export function buildProposalAgent(options: BuildProposalAgentOptions): Agent {
-  const { config, session, signal, priorMessages } = options;
+  const { config, session, signal, priorMessages, contextNote, maxTurns } = options;
+  const system =
+    contextNote === undefined || contextNote.trim().length === 0
+      ? SYSTEM_PROMPT
+      : `${SYSTEM_PROMPT}\n\n${contextNote.trim()}`;
   return new Agent({
     provider: config.provider,
     model: config.model,
     apiKey: config.apiKey,
-    system: SYSTEM_PROMPT,
+    system,
     tools: createProposalTools(session),
     signal,
-    maxTurns: DEFAULT_MAX_TURNS,
+    maxTurns: maxTurns ?? DEFAULT_MAX_TURNS,
     temperature: config.temperature ?? DEFAULT_TEMPERATURE,
     ...(priorMessages === undefined ? {} : { priorMessages }),
     ...(config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl }),

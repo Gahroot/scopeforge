@@ -1,153 +1,27 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Message } from "@kenkaiiii/gg-ai";
-import {
-  isAbortError,
-  isBillingError,
-  isContextOverflow,
-  isUsageLimitError,
-  type AgentEvent,
-  type AgentResult,
-} from "@kenkaiiii/gg-agent";
 import type { EnabledAgentConfig } from "../agent/config.node.js";
-import { logError } from "../diagnostics/logger.node.js";
-import { buildProposalAgent } from "../agent/proposalAgent.node.js";
+import { logError, logWarn } from "../diagnostics/logger.node.js";
+import { errorFrame, runProposalAgentStream } from "../agent/proposalAgentService.node.js";
 import {
-  buildSessionSnapshot,
+  applyClientBrandToSession,
   resolveSessionBrandId,
   type AgentSession,
   type SessionStore,
 } from "../agent/session.node.js";
+import { validateProposalBrand } from "../proposal/brands.js";
 import type { AgentStreamFrame } from "../ui/lib/types.js";
-import type { ProposalAudience } from "../proposal/types.js";
+import type { ProposalAudience, ProposalBrand } from "../proposal/types.js";
 
-/** Dual-nature stream: async-iterable of events + thenable for the final result. */
-export interface AgentLikeStream extends AsyncIterable<AgentEvent>, PromiseLike<AgentResult> {}
-
-export interface AgentLike {
-  prompt(content: string): AgentLikeStream;
-  getMessages(): Message[];
-}
-
-const TOOL_LABELS: Readonly<Record<string, string>> = {
-  set_project_inputs: "Setting project inputs",
-  patch_prepared_for: "Updating client details",
-  patch_details: "Updating proposal details",
-  patch_value_proposal: "Updating value proposition",
-  set_build_plan: "Setting build plan",
-  set_deliverables: "Setting deliverables",
-  patch_pricing: "Updating pricing",
-  set_terms: "Updating terms",
-  set_next_steps: "Setting next steps",
-  run_analysis: "Running analysis",
-  validate_draft: "Validating draft",
-  get_draft_summary: "Reviewing draft",
-};
-
-function toolLabel(name: string): string {
-  return TOOL_LABELS[name] ?? `Running ${name}`;
-}
-
-/**
- * Translate the agent's event stream into client SSE frames. Pure async generator
- * over an injected stream so it can be unit-tested with a fake AgentStream.
- * Pushes a final snapshot frame so the client always ends with the source-of-truth draft.
- */
-export async function* translateAgentStream(
-  stream: AgentLikeStream,
-  session: AgentSession,
-): AsyncGenerator<AgentStreamFrame> {
-  const toolNames = new Map<string, string>();
-  try {
-    for await (const event of stream) {
-      if (event.type === "error") {
-        logError("scopeforge.agent.event_error", event.error, { sessionId: session.id });
-      }
-      for (const frame of eventToFrames(event, toolNames)) yield frame;
-    }
-    const result = await stream;
-    yield { type: "snapshot", snapshot: buildSessionSnapshot(session) };
-    yield { type: "done", totalTurns: result.totalTurns };
-  } catch (error) {
-    // AgentStream rejects its result promise separately from the async iterator.
-    // Once iteration has started the stream is already drained, so observing it
-    // here only attaches a handler — preventing an unhandled rejection crash
-    // without stealing events from the loop above.
-    await Promise.resolve(stream).catch(() => undefined);
-    logError("scopeforge.agent.stream_failed", error, { sessionId: session.id });
-    yield { type: "snapshot", snapshot: buildSessionSnapshot(session) };
-    yield errorFrame(error);
-  }
-}
-
-/** Maps one agent event to zero or more client frames, tracking tool names by call id. */
-export function eventToFrames(
-  event: AgentEvent,
-  toolNames: Map<string, string>,
-): readonly AgentStreamFrame[] {
-  switch (event.type) {
-    case "text_delta":
-      return [{ type: "text_delta", text: event.text }];
-    case "thinking_delta":
-      return [{ type: "thinking_delta", text: event.text }];
-    case "tool_call_start":
-      toolNames.set(event.toolCallId, event.name);
-      return [
-        {
-          type: "tool_start",
-          toolCallId: event.toolCallId,
-          name: event.name,
-          label: toolLabel(event.name),
-        },
-      ];
-    case "tool_call_end":
-      return [
-        {
-          type: "tool_end",
-          toolCallId: event.toolCallId,
-          name: toolNames.get(event.toolCallId) ?? "",
-          summary: typeof event.result === "string" ? event.result : "",
-          isError: event.isError,
-        },
-      ];
-    case "error":
-      return [errorFrame(event.error)];
-    default:
-      return [];
-  }
-}
-
-export function errorFrame(error: unknown): Extract<AgentStreamFrame, { type: "error" }> {
-  if (isAbortError(error)) {
-    return { type: "error", code: "aborted", message: "The request was cancelled." };
-  }
-  if (isBillingError(error)) {
-    return {
-      type: "error",
-      code: "billing",
-      message:
-        "The model provider reported a billing or quota problem. Check the agent account balance.",
-    };
-  }
-  if (isUsageLimitError(error)) {
-    return {
-      type: "error",
-      code: "usage_limit",
-      message: "The model provider's usage window is exhausted. Try again after it resets.",
-    };
-  }
-  if (isContextOverflow(error)) {
-    return {
-      type: "error",
-      code: "context_overflow",
-      message: "The conversation grew too long for the model. Start a new session to continue.",
-    };
-  }
-  return {
-    type: "error",
-    code: "agent_error",
-    message: error instanceof Error ? error.message : String(error),
-  };
-}
+// Streaming translation, limits, and event mapping live in the agent runtime
+// (src/agent/proposalAgentService.node.ts). Re-exported here so existing
+// importers and tests keep their entry point.
+export {
+  errorFrame,
+  eventToFrames,
+  translateAgentStream,
+  type AgentLike,
+  type AgentLikeStream,
+} from "../agent/proposalAgentService.node.js";
 
 export function encodeSseFrame(frame: AgentStreamFrame): string {
   return `data: ${JSON.stringify(frame)}\n\n`;
@@ -158,6 +32,23 @@ interface AgentMessageInput {
   readonly message: string;
   readonly brandId?: string;
   readonly audience?: ProposalAudience;
+  readonly vendorBrand?: ProposalBrand;
+  readonly clientBrand?: ProposalBrand;
+}
+
+/**
+ * Validate an optional imported brand from the request body. A malformed brand is
+ * dropped (returns undefined) and logged — chat must never hard-fail on a bad brand.
+ */
+function parseOptionalBrand(value: unknown, role: "vendor" | "client"): ProposalBrand | undefined {
+  if (value === undefined || value === null) return undefined;
+  const result = validateProposalBrand(value);
+  if (result.ok) return result.value;
+  logWarn("scopeforge.agent.invalid_brand", {
+    role,
+    errors: result.errors.map((error) => `${error.path}: ${error.message}`),
+  });
+  return undefined;
 }
 
 type ParseResult =
@@ -175,6 +66,8 @@ export function parseAgentMessageBody(body: unknown): ParseResult {
   }
   const audience =
     record.audience === "internal" || record.audience === "client" ? record.audience : undefined;
+  const vendorBrand = parseOptionalBrand(record.vendorBrand, "vendor");
+  const clientBrand = parseOptionalBrand(record.clientBrand, "client");
   return {
     ok: true,
     value: {
@@ -182,6 +75,8 @@ export function parseAgentMessageBody(body: unknown): ParseResult {
       ...(typeof record.sessionId === "string" ? { sessionId: record.sessionId } : {}),
       ...(typeof record.brandId === "string" ? { brandId: record.brandId } : {}),
       ...(audience === undefined ? {} : { audience }),
+      ...(vendorBrand === undefined ? {} : { vendorBrand }),
+      ...(clientBrand === undefined ? {} : { clientBrand }),
     },
   };
 }
@@ -220,6 +115,13 @@ export async function handleAgentMessages(
     session.brandId = resolveSessionBrandId(parsed.value.brandId);
   }
   if (parsed.value.audience !== undefined) session.audience = parsed.value.audience;
+  if (parsed.value.vendorBrand !== undefined) session.vendorBrand = parsed.value.vendorBrand;
+  if (
+    parsed.value.clientBrand !== undefined &&
+    parsed.value.clientBrand.id !== session.clientBrand?.id
+  ) {
+    applyClientBrandToSession(session, parsed.value.clientBrand);
+  }
 
   const abort = new AbortController();
   session.abort = abort;
@@ -235,21 +137,18 @@ export async function handleAgentMessages(
 
   write(response, { type: "session", sessionId: session.id });
 
-  const agent = buildProposalAgent({
-    config: options.config,
-    session,
-    signal: abort.signal,
-    ...(session.messages.length > 0 ? { priorMessages: session.messages } : {}),
-  });
-
+  const contextNote = buildContextNote(session);
   try {
-    const stream = agent.prompt(parsed.value.message);
-    for await (const frame of translateAgentStream(stream, session)) {
+    for await (const frame of runProposalAgentStream({
+      config: options.config,
+      session,
+      message: parsed.value.message,
+      signal: abort.signal,
+      ...(session.messages.length > 0 ? { priorMessages: session.messages } : {}),
+      ...(contextNote === undefined ? {} : { contextNote }),
+    })) {
       write(response, frame);
     }
-    // getMessages() includes the system message; strip it so it is not duplicated
-    // when the stored history is replayed as priorMessages on the next turn.
-    session.messages = agent.getMessages().filter((message) => message.role !== "system");
   } catch (error) {
     logError("scopeforge.agent.request_failed", error, { sessionId: session.id });
     write(response, errorFrame(error));
@@ -261,4 +160,28 @@ export async function handleAgentMessages(
 
 function write(response: ServerResponse, frame: AgentStreamFrame): void {
   response.write(encodeSseFrame(frame));
+}
+
+/**
+ * Build a "Known context" note from imported vendor/client brands so the agent
+ * does not re-ask for identity it already has. Returns undefined when nothing is known.
+ */
+function buildContextNote(session: AgentSession): string | undefined {
+  const lines: string[] = [];
+  if (session.vendorBrand !== null) {
+    const vendor = session.vendorBrand;
+    const tagline = vendor.tagline === undefined ? "" : ` — ${vendor.tagline}`;
+    lines.push(`- Vendor (the consultant / "My brand"): ${vendor.name}${tagline}.`);
+  }
+  if (session.clientBrand !== null) {
+    const client = session.clientBrand;
+    const website = client.website === undefined ? "" : ` (${client.website})`;
+    lines.push(`- Client (who the proposal is for): ${client.name}${website}.`);
+  }
+  if (lines.length === 0) return undefined;
+  return [
+    "Known context (already imported — do NOT re-ask for these):",
+    ...lines,
+    "Use these facts directly and move on to the project goal, scope, value, and pricing.",
+  ].join("\n");
 }
