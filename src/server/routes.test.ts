@@ -1,9 +1,21 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { acmeWebsiteHtml } from "../brand/fixtures/acmeWebsite.js";
 import type { WebsiteBrandLookup } from "../brand/types.js";
 import { tritenExample } from "../data/defaults.js";
-import { validateProposalBrand } from "../proposal/brands.js";
+import {
+  createProposalAuthorMetadata,
+  toProposalProjectId,
+  toProposalProjectVersionId,
+} from "../project/state.js";
+import {
+  createLocalProposalProjectStore,
+  type LocalProposalProjectStore,
+} from "../project/store.node.js";
+import { BUILT_IN_BRANDS, validateProposalBrand } from "../proposal/brands.js";
 import { proposalIntakeToDraft } from "../proposal/draftStore.js";
-import type { ProposalIntake } from "../proposal/types.js";
+import type { ProposalDraft, ProposalIntake } from "../proposal/types.js";
 import { handleApiRoute, type ApiRouteResponse } from "./routes.js";
 
 const routeBrandLookup: WebsiteBrandLookup = async (hostname) => {
@@ -24,6 +36,16 @@ function htmlResponse(html: string, init: ResponseInit = {}): Response {
     },
   });
 }
+
+const PROJECT_ROUTE_CREATED_AT = "2026-06-07T12:00:00.000Z";
+const PROJECT_ROUTE_UPDATED_AT = "2026-06-07T13:00:00.000Z";
+
+const projectRouteAuthor = createProposalAuthorMetadata({
+  authorId: "human-route-test",
+  displayName: "Route Test Human",
+  kind: "human",
+  email: "route-test@example.com",
+});
 
 const sampleIntake = {
   project: tritenExample(),
@@ -360,6 +382,189 @@ describe("server API routes", () => {
     );
   });
 
+  it("creates, lists, reads, updates, previews, histories, and exports local proposal projects", async () => {
+    await withProjectRouteStore(async (store) => {
+      const initialDraft = projectRouteDraft("Operations AI Pilot", 1);
+      const createResponse = await handleApiRoute(
+        {
+          method: "POST",
+          pathname: "/api/proposal-projects",
+          body: {
+            draft: initialDraft,
+            brand: BUILT_IN_BRANDS.partners,
+            clientBrand: BUILT_IN_BRANDS.nolan,
+            createdBy: projectRouteAuthor,
+            title: "Acme project workspace",
+            label: "Initial project draft",
+            createdAt: PROJECT_ROUTE_CREATED_AT,
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const createdJson = expectJson(createResponse);
+      const createdProject = readRecordField(createdJson.body, "project");
+      const projectId = readStringField(createdProject, "projectId");
+      const initialVersionId = readStringField(createdProject, "currentVersionId");
+
+      expect(createdJson.status).toBe(201);
+      expect(projectId).toBe("route-project-1");
+      expect(initialVersionId).toBe("route-version-1-1");
+
+      const listResponse = await handleApiRoute(
+        { method: "GET", pathname: "/api/proposal-projects" },
+        { proposalProjectStore: store },
+      );
+      const listedProjects = readArrayField(expectJson(listResponse).body, "projects");
+
+      expect(listedProjects).toEqual([
+        expect.objectContaining({
+          projectId,
+          title: "Acme project workspace",
+          currentVersionId: initialVersionId,
+          versionCount: 1,
+        }),
+      ]);
+
+      const stateResponse = await handleApiRoute(
+        { method: "GET", pathname: `/api/proposal-projects/${projectId}` },
+        { proposalProjectStore: store },
+      );
+      const stateJson = expectJson(stateResponse);
+      const currentVersion = readRecordField(stateJson.body, "currentVersion");
+
+      expect(stateJson.status).toBe(200);
+      expect(readStringField(currentVersion, "versionId")).toBe(initialVersionId);
+
+      const updatedDraft = projectRouteDraft("Updated Operations AI Pilot", 2);
+      const updateResponse = await handleApiRoute(
+        {
+          method: "PATCH",
+          pathname: `/api/proposal-projects/${projectId}`,
+          body: {
+            baseVersionId: initialVersionId,
+            draft: updatedDraft,
+            createdBy: projectRouteAuthor,
+            label: "Retitle proposal",
+            reason: "Client-facing title tightened after review.",
+            createdAt: PROJECT_ROUTE_UPDATED_AT,
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const updateJson = expectJson(updateResponse);
+      const updatedProject = readRecordField(updateJson.body, "project");
+      const updatedSource = readRecordField(updateJson.body, "sourceOfTruth");
+      const updatedVendorBrand = readRecordField(updatedSource, "vendorBrand");
+      const updatedClientBrand = readRecordField(updatedSource, "clientBrand");
+      const updatedVersionId = readStringField(updatedProject, "currentVersionId");
+
+      expect(updateJson.status).toBe(200);
+      expect(updatedVersionId).toBe("route-version-2-2");
+      expect(readStringField(updatedVendorBrand, "id")).toBe("partners");
+      expect(readStringField(updatedClientBrand, "id")).toBe("nolan");
+
+      const historyResponse = await handleApiRoute(
+        { method: "GET", pathname: `/api/proposal-projects/${projectId}/versions` },
+        { proposalProjectStore: store },
+      );
+      const versions = readArrayField(expectJson(historyResponse).body, "versions");
+
+      expect(versions).toHaveLength(2);
+      expect(versions[1]).toEqual(
+        expect.objectContaining({
+          versionId: updatedVersionId,
+          parentVersionId: initialVersionId,
+        }),
+      );
+
+      const previewResponse = await handleApiRoute(
+        {
+          method: "POST",
+          pathname: `/api/proposal-projects/${projectId}/preview`,
+          body: { audience: "client", iterations: 500, generatedAt: "2026-06-07T00:00:00.000Z" },
+        },
+        { proposalProjectStore: store },
+      );
+      const previewJson = expectJson(previewResponse);
+      const previewHtml = readStringField(previewJson.body, "html");
+
+      expect(previewJson.status).toBe(200);
+      expect(readStringField(previewJson.body, "currentVersionId")).toBe(updatedVersionId);
+      expect(previewHtml).toContain("Updated Operations AI Pilot");
+
+      const pdfBytes = Buffer.from("%PDF-project-route-test");
+      const exportResponse = await handleApiRoute(
+        {
+          method: "POST",
+          pathname: `/api/proposal-projects/${projectId}/export-pdf`,
+          body: { audience: "client", iterations: 500, fileName: "../Acme Project.pdf" },
+        },
+        {
+          proposalProjectStore: store,
+          renderPdf: async (request) => {
+            expect(request.html).toContain("Updated Operations AI Pilot");
+            return { bytes: pdfBytes, format: request.format };
+          },
+        },
+      );
+      const binary = expectBinary(exportResponse);
+
+      expect(binary.status).toBe(200);
+      expect(binary.body).toEqual(pdfBytes);
+      expect(binary.headers["Content-Disposition"]).toBe('attachment; filename="Acme Project.pdf"');
+    });
+  });
+
+  it("returns typed JSON errors for missing projects and stale base versions", async () => {
+    await withProjectRouteStore(async (store) => {
+      const missingResponse = await handleApiRoute(
+        { method: "GET", pathname: "/api/proposal-projects/missing-project" },
+        { proposalProjectStore: store },
+      );
+      const missingJson = expectJson(missingResponse);
+      const missingError = readRecordField(missingJson.body, "error");
+
+      expect(missingJson.status).toBe(404);
+      expect(readStringField(missingError, "code")).toBe("project_not_found");
+
+      const createResponse = await handleApiRoute(
+        {
+          method: "POST",
+          pathname: "/api/proposal-projects",
+          body: {
+            draft: projectRouteDraft("Operations AI Pilot", 1),
+            brand: BUILT_IN_BRANDS.nolan,
+            clientBrand: BUILT_IN_BRANDS.partners,
+            createdBy: projectRouteAuthor,
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const createdProject = readRecordField(expectJson(createResponse).body, "project");
+      const projectId = readStringField(createdProject, "projectId");
+
+      const conflictResponse = await handleApiRoute(
+        {
+          method: "PATCH",
+          pathname: `/api/proposal-projects/${projectId}`,
+          body: {
+            baseVersionId: "route-version-stale",
+            draft: projectRouteDraft("Conflicting Operations AI Pilot", 2),
+            brand: BUILT_IN_BRANDS.nolan,
+            clientBrand: BUILT_IN_BRANDS.partners,
+            createdBy: projectRouteAuthor,
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const conflictJson = expectJson(conflictResponse);
+      const conflictError = readRecordField(conflictJson.body, "error");
+
+      expect(conflictJson.status).toBe(409);
+      expect(readStringField(conflictError, "code")).toBe("base_version_conflict");
+    });
+  });
+
   it("no longer handles the agent endpoint in the JSON router (it is streamed upstream)", async () => {
     const response = await handleApiRoute({
       method: "POST",
@@ -377,6 +582,64 @@ describe("server API routes", () => {
     );
   });
 });
+
+async function withProjectRouteStore(
+  run: (store: LocalProposalProjectStore) => Promise<void>,
+): Promise<void> {
+  const dataDir = await mkdtemp(join(tmpdir(), "scopeforge-routes-projects-"));
+  try {
+    await run(projectRouteStore(dataDir));
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+}
+
+function projectRouteStore(dataDir: string): LocalProposalProjectStore {
+  let projectCounter = 0;
+  let versionCounter = 0;
+  let timeIndex = 0;
+  const times = [PROJECT_ROUTE_CREATED_AT, PROJECT_ROUTE_UPDATED_AT];
+  return createLocalProposalProjectStore({
+    dataDir,
+    now: () => {
+      const value = times[timeIndex] ?? times[times.length - 1] ?? PROJECT_ROUTE_CREATED_AT;
+      timeIndex += 1;
+      return value;
+    },
+    projectIdFactory: () => {
+      projectCounter += 1;
+      return toProposalProjectId(`route-project-${projectCounter}`);
+    },
+    versionIdFactory: ({ versionNumber }) => {
+      versionCounter += 1;
+      return toProposalProjectVersionId(`route-version-${versionNumber}-${versionCounter}`);
+    },
+  });
+}
+
+function projectRouteDraft(title: string, version: number): ProposalDraft {
+  const draft = proposalIntakeToDraft(sampleIntake, {
+    draftId: "route-draft-acme",
+    createdAt: PROJECT_ROUTE_CREATED_AT,
+    updatedAt: version === 1 ? PROJECT_ROUTE_CREATED_AT : PROJECT_ROUTE_UPDATED_AT,
+    author: projectRouteAuthor.displayName,
+    source: "routes-test",
+    footerContact: "hello@scopeforge.local",
+    paymentTerms: "50% to start, 50% at pilot handoff.",
+  });
+  return {
+    ...draft,
+    metadata: {
+      ...draft.metadata,
+      version,
+      updatedAt: version === 1 ? PROJECT_ROUTE_CREATED_AT : PROJECT_ROUTE_UPDATED_AT,
+    },
+    details: {
+      ...draft.details,
+      title,
+    },
+  } satisfies ProposalDraft;
+}
 
 function expectJson(
   response: ApiRouteResponse | null,
@@ -413,6 +676,13 @@ function readStringField(input: unknown, key: string): string {
 function readNumberField(input: unknown, key: string): number {
   if (!isRecord(input) || typeof input[key] !== "number") {
     throw new Error(`Expected ${key} to be a number.`);
+  }
+  return input[key];
+}
+
+function readArrayField(input: unknown, key: string): readonly unknown[] {
+  if (!isRecord(input) || !Array.isArray(input[key])) {
+    throw new Error(`Expected ${key} to be an array.`);
   }
   return input[key];
 }

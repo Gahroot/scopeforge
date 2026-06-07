@@ -12,6 +12,30 @@ import type { AgentConfigSummary } from "../agent/config.node.js";
 import { logError, logEvent } from "../diagnostics/logger.node.js";
 import { analyzeProject, type AnalyzeOptions, type Project } from "../core/index.js";
 import { validateProject } from "../data/schema.js";
+import {
+  createProposalAuthorMetadata,
+  getCurrentProjectVersion,
+  toProposalProjectId,
+  toProposalProjectVersionId,
+} from "../project/state.js";
+import {
+  createLocalProposalProjectStore,
+  type ProposalProjectListItem,
+  type ProposalProjectStoreLoadResult,
+} from "../project/store.node.js";
+import type {
+  CommitProposalProjectVersionInput,
+  CreateProposalProjectInput,
+  ProposalAuthorKind,
+  ProposalAuthorMetadata,
+  ProposalProject,
+  ProposalProjectId,
+  ProposalProjectSourceOfTruth,
+  ProposalProjectStatus,
+  ProposalProjectVersion,
+  ProposalProjectVersionId,
+  ProposalProjectVersionSource,
+} from "../project/types.js";
 import { resolveBrand, validateProposalBrand } from "../proposal/brands.js";
 import { proposalIntakeToDraft } from "../proposal/draftStore.js";
 import { getClientBlockingWarnings } from "../proposal/model.js";
@@ -22,6 +46,7 @@ import {
   validateProposalIntake,
 } from "../proposal/schema.js";
 import type {
+  PreparedFor,
   ProposalAudience,
   ProposalBrand,
   ProposalBrandColors,
@@ -41,6 +66,28 @@ const MAX_BRAND_TIMEOUT_MS = 30_000;
 const DEFAULT_PDF_FORMAT = "Letter";
 const DEFAULT_TEMPLATE_ID = "generic/value-proposal" satisfies ProposalDraftTemplateId;
 const MAX_ITERATIONS = 250_000;
+const PROPOSAL_PROJECT_ROUTE_NAMES = ["proposal-projects", "projects"] as const;
+const PROPOSAL_PROJECT_STATUSES = [
+  "active",
+  "archived",
+] as const satisfies readonly ProposalProjectStatus[];
+const PROPOSAL_PROJECT_VERSION_SOURCES = [
+  "human-edit",
+  "agent-edit",
+  "import",
+  "restore",
+  "system",
+] as const satisfies readonly ProposalProjectVersionSource[];
+const PROPOSAL_AUTHOR_KINDS = [
+  "human",
+  "agent",
+  "system",
+] as const satisfies readonly ProposalAuthorKind[];
+const DEFAULT_PROJECT_AUTHOR = createProposalAuthorMetadata({
+  authorId: "local-api",
+  displayName: "ScopeForge Local API",
+  kind: "system",
+});
 const PROPOSAL_BRAND_COLOR_KEYS = [
   "primary",
   "secondary",
@@ -110,9 +157,21 @@ export type WebsiteBrandExtractor = (
   options: ExtractWebsiteBrandOptions,
 ) => Promise<WebsiteBrandExtractionResult>;
 
+export interface ProposalProjectStore {
+  readonly load?: () => Promise<ProposalProjectStoreLoadResult>;
+  readonly list: () => readonly ProposalProjectListItem[];
+  readonly get: (projectId: ProposalProjectId) => ProposalProject | null;
+  readonly create: (input: CreateProposalProjectInput) => Promise<ProposalProject>;
+  readonly update: (
+    projectId: ProposalProjectId,
+    input: CommitProposalProjectVersionInput,
+  ) => Promise<ProposalProject | null>;
+}
+
 export interface AppRouteDependencies {
   readonly renderPdf?: ProposalPdfRenderer;
   readonly extractWebsiteBrand?: WebsiteBrandExtractor;
+  readonly proposalProjectStore?: ProposalProjectStore;
   readonly brandFetch?: typeof fetch;
   readonly brandLookupHost?: WebsiteBrandLookup;
   readonly brandNow?: () => Date;
@@ -148,6 +207,23 @@ type RouteValueResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly response: ApiRouteResponse };
 
+type ProposalProjectRoute =
+  | { readonly action: "collection" }
+  | { readonly action: "state"; readonly projectId: ProposalProjectId }
+  | { readonly action: "versions"; readonly projectId: ProposalProjectId }
+  | { readonly action: "preview"; readonly projectId: ProposalProjectId }
+  | { readonly action: "exportPdf"; readonly projectId: ProposalProjectId };
+
+interface LoadedProposalProject {
+  readonly store: ProposalProjectStore;
+  readonly project: ProposalProject;
+}
+
+interface ProposalProjectSourceDefaults {
+  readonly vendorBrand: ProposalBrand;
+  readonly clientBrand: ProposalBrand;
+}
+
 export async function handleApiRoute(
   request: AppRouteRequest,
   dependencies: AppRouteDependencies = {},
@@ -160,6 +236,12 @@ export async function handleApiRoute(
     return healthResponse(dependencies.agentSummary);
   }
   if (request.method === "GET" && pathname === "/api/brands") return brandsResponse();
+
+  const proposalProjectRoute = parseProposalProjectRoute(pathname);
+  if (proposalProjectRoute !== null) {
+    return handleProposalProjectRoute(proposalProjectRoute, request, dependencies);
+  }
+
   if (request.method === "POST" && pathname === "/api/brands/validate") {
     return validateBrandResponse(request.body);
   }
@@ -203,6 +285,930 @@ export async function renderPdfWithPlaywright(
   return { bytes: pdf.bytes, format: pdf.format };
 }
 
+async function handleProposalProjectRoute(
+  route: ProposalProjectRoute,
+  request: AppRouteRequest,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  switch (route.action) {
+    case "collection":
+      if (request.method === "GET") return listProposalProjectsResponse(dependencies);
+      if (request.method === "POST")
+        return createProposalProjectResponse(request.body, dependencies);
+      return methodNotAllowedResponse(
+        "GET, POST",
+        "Proposal project collections support list and create.",
+      );
+    case "state":
+      if (request.method === "GET")
+        return latestProposalProjectStateResponse(route.projectId, dependencies);
+      if (request.method === "PATCH" || request.method === "PUT") {
+        return updateProposalProjectResponse(route.projectId, request.body, dependencies);
+      }
+      return methodNotAllowedResponse(
+        "GET, PATCH, PUT",
+        "Proposal project state supports read and base-versioned updates.",
+      );
+    case "versions":
+      if (request.method === "GET")
+        return proposalProjectVersionHistoryResponse(route.projectId, dependencies);
+      return methodNotAllowedResponse("GET", "Proposal project version history is read-only.");
+    case "preview":
+      if (request.method === "GET" || request.method === "POST") {
+        return previewLatestProposalProjectResponse(route.projectId, request.body, dependencies);
+      }
+      return methodNotAllowedResponse(
+        "GET, POST",
+        "Proposal project preview renders the latest state.",
+      );
+    case "exportPdf":
+      if (request.method === "POST") {
+        return exportLatestProposalProjectPdfResponse(
+          route.projectId,
+          request.body,
+          request.signal,
+          dependencies,
+        );
+      }
+      return methodNotAllowedResponse(
+        "POST",
+        "Proposal project PDF export requires a POST request.",
+      );
+  }
+}
+
+async function listProposalProjectsResponse(
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const store = await loadProposalProjectStore(dependencies);
+  if (!store.ok) return store.response;
+
+  return jsonResponse(200, {
+    ok: true,
+    projects: store.value.list(),
+  });
+}
+
+async function createProposalProjectResponse(
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const createInput = resolveCreateProposalProjectInput(input);
+  if (!createInput.ok) return createInput.response;
+
+  const store = await loadProposalProjectStore(dependencies);
+  if (!store.ok) return store.response;
+
+  try {
+    const project = await store.value.create(createInput.value);
+    const currentVersion = getCurrentProjectVersion(project);
+    return jsonResponse(201, {
+      ok: true,
+      project,
+      ...(currentVersion === null
+        ? {}
+        : { currentVersion, sourceOfTruth: currentVersion.sourceOfTruth }),
+    });
+  } catch (error) {
+    return projectStoreWriteFailureResponse("project_create_failed", error);
+  }
+}
+
+async function latestProposalProjectStateResponse(
+  projectId: ProposalProjectId,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const loaded = await loadProposalProject(projectId, dependencies);
+  if (!loaded.ok) return loaded.response;
+
+  const currentVersion = currentProjectVersionResult(loaded.value.project);
+  if (!currentVersion.ok) return currentVersion.response;
+
+  return jsonResponse(200, {
+    ok: true,
+    projectId: loaded.value.project.projectId,
+    project: loaded.value.project,
+    currentVersion: currentVersion.value,
+    sourceOfTruth: currentVersion.value.sourceOfTruth,
+  });
+}
+
+async function proposalProjectVersionHistoryResponse(
+  projectId: ProposalProjectId,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const loaded = await loadProposalProject(projectId, dependencies);
+  if (!loaded.ok) return loaded.response;
+
+  return jsonResponse(200, {
+    ok: true,
+    projectId: loaded.value.project.projectId,
+    currentVersionId: loaded.value.project.currentVersionId,
+    versions: loaded.value.project.versions,
+  });
+}
+
+async function updateProposalProjectResponse(
+  projectId: ProposalProjectId,
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const loaded = await loadProposalProject(projectId, dependencies);
+  if (!loaded.ok) return loaded.response;
+
+  const updateInput = resolveUpdateProposalProjectInput(input, loaded.value.project);
+  if (!updateInput.ok) return updateInput.response;
+
+  try {
+    const updated = await loaded.value.store.update(projectId, updateInput.value);
+    if (updated === null) return proposalProjectNotFoundResponse(projectId);
+
+    const currentVersion = getCurrentProjectVersion(updated);
+    return jsonResponse(200, {
+      ok: true,
+      project: updated,
+      ...(currentVersion === null
+        ? {}
+        : { currentVersion, sourceOfTruth: currentVersion.sourceOfTruth }),
+    });
+  } catch (error) {
+    return projectStoreWriteFailureResponse("project_update_failed", error);
+  }
+}
+
+async function previewLatestProposalProjectResponse(
+  projectId: ProposalProjectId,
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const loaded = await loadProposalProject(projectId, dependencies);
+  if (!loaded.ok) return loaded.response;
+
+  const currentVersion = currentProjectVersionResult(loaded.value.project);
+  if (!currentVersion.ok) return currentVersion.response;
+
+  const bundle = buildLatestProjectRenderBundle(currentVersion.value, input);
+  if (!bundle.ok) return bundle.response;
+
+  const analysis = analyzeProject(bundle.value.proposal.project, bundle.value.analysisOptions);
+  const blockingWarnings = getClientBlockingWarnings(analysis, { audience: bundle.value.audience });
+  if (blockingWarnings.length > 0) {
+    return failureResponse(
+      422,
+      "guardrail_errors",
+      "Guardrail errors block client proposal preview. Fix the economics or request internal audience.",
+      blockingWarnings.map((warning) => `${warning.rule}: ${warning.message}`),
+    );
+  }
+
+  return jsonResponse(200, {
+    ok: true,
+    projectId: loaded.value.project.projectId,
+    currentVersionId: currentVersion.value.versionId,
+    kind: bundle.value.proposal.kind,
+    templateId: bundle.value.proposal.templateId,
+    audience: bundle.value.audience,
+    brand: bundle.value.brand,
+    analysis,
+    warnings: analysis.warnings,
+    html: bundle.value.html,
+  });
+}
+
+async function exportLatestProposalProjectPdfResponse(
+  projectId: ProposalProjectId,
+  input: unknown,
+  signal: AbortSignal | undefined,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const loaded = await loadProposalProject(projectId, dependencies);
+  if (!loaded.ok) return loaded.response;
+
+  const currentVersion = currentProjectVersionResult(loaded.value.project);
+  if (!currentVersion.ok) return currentVersion.response;
+
+  const bundle = buildLatestProjectRenderBundle(currentVersion.value, input);
+  if (!bundle.ok) return bundle.response;
+
+  const analysis = analyzeProject(bundle.value.proposal.project, bundle.value.analysisOptions);
+  const blockingWarnings = getClientBlockingWarnings(analysis, { audience: bundle.value.audience });
+  if (blockingWarnings.length > 0) {
+    return failureResponse(
+      422,
+      "guardrail_errors",
+      "Guardrail errors block client PDF export. Fix the economics or request internal audience.",
+      blockingWarnings.map((warning) => `${warning.rule}: ${warning.message}`),
+    );
+  }
+
+  const format = readOptionalString(input, "format") ?? DEFAULT_PDF_FORMAT;
+  const fileName = sanitizePdfFileName(
+    readOptionalString(input, "fileName") ??
+      `${bundle.value.proposal.intake.preparedFor.companyName}-proposal.pdf`,
+  );
+  const renderPdf = dependencies.renderPdf ?? renderPdfWithPlaywright;
+
+  try {
+    const pdf = await renderPdf({
+      html: bundle.value.html,
+      format,
+      ...(signal === undefined ? {} : { signal }),
+    });
+
+    return {
+      kind: "binary",
+      status: 200,
+      headers: {
+        "Cache-Control": "no-store",
+        "Content-Disposition": `attachment; filename="${fileName}"`,
+        "Content-Length": String(pdf.bytes.byteLength),
+        "Content-Type": "application/pdf",
+        "X-Content-Type-Options": "nosniff",
+        "X-ScopeForge-Pdf-Format": pdf.format,
+      },
+      body: pdf.bytes,
+    };
+  } catch (error) {
+    logError("scopeforge.route.project_pdf_render_failed", error, {
+      projectId,
+      versionId: currentVersion.value.versionId,
+      format,
+      fileName,
+    });
+    return pdfRenderFailureResponse(error);
+  }
+}
+
+async function loadProposalProject(
+  projectId: ProposalProjectId,
+  dependencies: AppRouteDependencies,
+): Promise<RouteValueResult<LoadedProposalProject>> {
+  const store = await loadProposalProjectStore(dependencies);
+  if (!store.ok) return store;
+
+  const project = store.value.get(projectId);
+  if (project === null) return routeFailure(proposalProjectNotFoundResponse(projectId));
+  return { ok: true, value: { store: store.value, project } };
+}
+
+async function loadProposalProjectStore(
+  dependencies: AppRouteDependencies,
+): Promise<RouteValueResult<ProposalProjectStore>> {
+  const store = dependencies.proposalProjectStore ?? createLocalProposalProjectStore();
+  if (store.load === undefined) return { ok: true, value: store };
+
+  try {
+    const loadResult = await store.load();
+    if (loadResult.ok) return { ok: true, value: store };
+    return routeFailure(
+      failureResponse(
+        503,
+        "project_store_load_failed",
+        "Proposal project storage could not be loaded safely.",
+        projectStoreLoadFailureDetails(loadResult),
+      ),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return routeFailure(
+      failureResponse(
+        503,
+        "project_store_unavailable",
+        "Proposal project storage is unavailable.",
+        [message],
+      ),
+    );
+  }
+}
+
+function projectStoreLoadFailureDetails(
+  loadResult: ProposalProjectStoreLoadResult,
+): readonly string[] {
+  if (loadResult.ok) return [];
+  return loadResult.errors.map((error) =>
+    [
+      `code: ${error.code}`,
+      `path: ${error.path}`,
+      `message: ${error.message}`,
+      ...(error.details === undefined ? [] : error.details),
+    ].join("; "),
+  );
+}
+
+function resolveCreateProposalProjectInput(
+  input: unknown,
+): RouteValueResult<CreateProposalProjectInput> {
+  if (!isRecord(input)) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "project_request_invalid",
+        "Create project request body must be a JSON object.",
+      ),
+    );
+  }
+
+  const sourceOfTruth = resolveProposalProjectSourceOfTruth(input);
+  if (!sourceOfTruth.ok) return sourceOfTruth;
+
+  const createdBy = resolveProposalProjectAuthor(input);
+  if (!createdBy.ok) return createdBy;
+
+  const projectId = resolveOptionalProjectId(input, "projectId");
+  if (!projectId.ok) return projectId;
+
+  const versionId = resolveOptionalProjectVersionId(input, "versionId");
+  if (!versionId.ok) return versionId;
+
+  const status = resolveOptionalProjectStatus(input);
+  if (!status.ok) return status;
+
+  const source = resolveOptionalProjectVersionSource(input);
+  if (!source.ok) return source;
+
+  const title = readOptionalRouteString(input, "title", "title_invalid", "title");
+  if (!title.ok) return title;
+
+  const createdAt = readOptionalRouteString(input, "createdAt", "created_at_invalid", "createdAt");
+  if (!createdAt.ok) return createdAt;
+
+  const label = readOptionalRouteString(input, "label", "label_invalid", "label");
+  if (!label.ok) return label;
+
+  return {
+    ok: true,
+    value: {
+      sourceOfTruth: sourceOfTruth.value,
+      createdBy: createdBy.value,
+      ...(projectId.value === undefined ? {} : { projectId: projectId.value }),
+      ...(versionId.value === undefined ? {} : { versionId: versionId.value }),
+      ...(title.value === undefined ? {} : { title: title.value }),
+      ...(createdAt.value === undefined ? {} : { createdAt: createdAt.value }),
+      ...(status.value === undefined ? {} : { status: status.value }),
+      ...(label.value === undefined ? {} : { label: label.value }),
+      ...(source.value === undefined ? {} : { source: source.value }),
+    },
+  };
+}
+
+function resolveUpdateProposalProjectInput(
+  input: unknown,
+  project: ProposalProject,
+): RouteValueResult<CommitProposalProjectVersionInput> {
+  if (!isRecord(input)) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "project_request_invalid",
+        "Update project request body must be a JSON object with baseVersionId.",
+      ),
+    );
+  }
+
+  const baseVersionId = resolveRequiredBaseVersionId(input);
+  if (!baseVersionId.ok) return baseVersionId;
+
+  if (baseVersionId.value !== project.currentVersionId) {
+    return routeFailure(
+      failureResponse(
+        409,
+        "base_version_conflict",
+        "Project has changed since the provided baseVersionId.",
+        [
+          `provided: ${baseVersionId.value}`,
+          `current: ${project.currentVersionId}`,
+          "Fetch the latest project state and retry the update against the current version.",
+        ],
+      ),
+    );
+  }
+
+  const currentVersion = currentProjectVersionResult(project);
+  if (!currentVersion.ok) return currentVersion;
+
+  const sourceOfTruth = resolveProposalProjectSourceOfTruth(
+    input,
+    currentVersion.value.sourceOfTruth,
+  );
+  if (!sourceOfTruth.ok) return sourceOfTruth;
+
+  const createdBy = resolveProposalProjectAuthor(input);
+  if (!createdBy.ok) return createdBy;
+
+  const versionId = resolveOptionalProjectVersionId(input, "versionId");
+  if (!versionId.ok) return versionId;
+
+  const source = resolveOptionalProjectVersionSource(input);
+  if (!source.ok) return source;
+
+  const createdAt = readOptionalRouteString(input, "createdAt", "created_at_invalid", "createdAt");
+  if (!createdAt.ok) return createdAt;
+
+  const label = readOptionalRouteString(input, "label", "label_invalid", "label");
+  if (!label.ok) return label;
+
+  const reason = readOptionalRouteString(input, "reason", "reason_invalid", "reason");
+  if (!reason.ok) return reason;
+
+  return {
+    ok: true,
+    value: {
+      sourceOfTruth: sourceOfTruth.value,
+      createdBy: createdBy.value,
+      parentVersionId: baseVersionId.value,
+      ...(versionId.value === undefined ? {} : { versionId: versionId.value }),
+      ...(createdAt.value === undefined ? {} : { createdAt: createdAt.value }),
+      ...(label.value === undefined ? {} : { label: label.value }),
+      ...(reason.value === undefined ? {} : { reason: reason.value }),
+      ...(source.value === undefined ? {} : { source: source.value }),
+    },
+  };
+}
+
+function resolveProposalProjectSourceOfTruth(
+  input: Readonly<Record<string, unknown>>,
+  defaults?: ProposalProjectSourceDefaults,
+): RouteValueResult<ProposalProjectSourceOfTruth> {
+  if (Object.hasOwn(input, "sourceOfTruth")) {
+    return validateProposalProjectSourceOfTruth(input.sourceOfTruth, "sourceOfTruth");
+  }
+
+  const proposal = resolveProposalDocument(input);
+  if (!proposal.ok) return proposal;
+
+  const vendorBrand = resolveProjectVendorBrand(input, defaults?.vendorBrand);
+  if (!vendorBrand.ok) return vendorBrand;
+
+  const clientBrand = resolveClientBrand(
+    input,
+    proposal.value.draft.preparedFor,
+    defaults?.clientBrand,
+  );
+  if (!clientBrand.ok) return clientBrand;
+
+  return {
+    ok: true,
+    value: {
+      draft: proposal.value.draft,
+      vendorBrand: vendorBrand.value,
+      clientBrand: clientBrand.value,
+    },
+  };
+}
+
+function validateProposalProjectSourceOfTruth(
+  input: unknown,
+  path: string,
+): RouteValueResult<ProposalProjectSourceOfTruth> {
+  if (!isRecord(input)) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "source_of_truth_invalid",
+        "sourceOfTruth must be an object with draft, vendorBrand, and clientBrand.",
+      ),
+    );
+  }
+
+  const errors: ProposalValidationError[] = [];
+  let draft: ProposalDraft | null = null;
+  let vendorBrand: ProposalBrand | null = null;
+  let clientBrand: ProposalBrand | null = null;
+
+  const draftResult = validateProposalDraft(input.draft);
+  if (draftResult.ok) {
+    draft = draftResult.value;
+  } else {
+    appendNestedValidationErrors(errors, `${path}.draft`, draftResult.errors);
+  }
+
+  const vendorBrandResult = validateProposalBrand(input.vendorBrand);
+  if (vendorBrandResult.ok) {
+    vendorBrand = vendorBrandResult.value;
+  } else {
+    appendNestedValidationErrors(errors, `${path}.vendorBrand`, vendorBrandResult.errors);
+  }
+
+  const clientBrandResult = validateProposalBrand(input.clientBrand);
+  if (clientBrandResult.ok) {
+    clientBrand = clientBrandResult.value;
+  } else {
+    appendNestedValidationErrors(errors, `${path}.clientBrand`, clientBrandResult.errors);
+  }
+
+  if (errors.length > 0) {
+    return routeFailure(
+      validationFailureResponse("Proposal project source of truth is invalid.", errors),
+    );
+  }
+  if (draft === null || vendorBrand === null || clientBrand === null) {
+    return routeFailure(
+      failureResponse(422, "validation_failed", "Proposal project source of truth is invalid."),
+    );
+  }
+
+  return { ok: true, value: { draft, vendorBrand, clientBrand } };
+}
+
+function resolveProjectVendorBrand(
+  input: Readonly<Record<string, unknown>>,
+  defaultBrand: ProposalBrand | undefined,
+): RouteValueResult<ProposalBrand> {
+  const rawBrand = readOptionalUnknown(input, "brand") ?? readOptionalUnknown(input, "brandId");
+  if (rawBrand === undefined) {
+    return { ok: true, value: defaultBrand ?? resolveBuiltInBrand(DEFAULT_BRAND_ID) };
+  }
+
+  if (typeof rawBrand === "string") {
+    const brand = resolveBrand(rawBrand);
+    if (brand === null) {
+      return routeFailure(
+        failureResponse(
+          400,
+          "brand_unknown",
+          "Brand must be a built-in id or a full brand profile.",
+        ),
+      );
+    }
+    return { ok: true, value: brand };
+  }
+
+  const result = validateProposalBrand(rawBrand);
+  if (!result.ok) return validationFailureResult("Brand profile is invalid.", result.errors);
+  return { ok: true, value: result.value };
+}
+
+function resolveClientBrand(
+  input: Readonly<Record<string, unknown>>,
+  preparedFor: PreparedFor,
+  defaultBrand: ProposalBrand | undefined,
+): RouteValueResult<ProposalBrand> {
+  const rawClientBrand =
+    readOptionalUnknown(input, "clientBrand") ?? readOptionalUnknown(input, "clientBrandId");
+  if (rawClientBrand === undefined) {
+    return { ok: true, value: defaultBrand ?? deriveClientBrand(preparedFor) };
+  }
+
+  if (typeof rawClientBrand === "string") {
+    const brand = resolveBrand(rawClientBrand);
+    if (brand === null) {
+      return routeFailure(
+        failureResponse(
+          400,
+          "client_brand_unknown",
+          "clientBrandId must be a built-in id or clientBrand must be a full brand profile.",
+        ),
+      );
+    }
+    return { ok: true, value: brand };
+  }
+
+  const result = validateProposalBrand(rawClientBrand);
+  if (!result.ok) return validationFailureResult("Client brand profile is invalid.", result.errors);
+  return { ok: true, value: result.value };
+}
+
+function deriveClientBrand(preparedFor: PreparedFor): ProposalBrand {
+  const name = preparedFor.companyName;
+  const accent = preparedFor.accentColor ?? "#2563eb";
+  return {
+    id: slugifyRouteIdentifier(name, "client"),
+    name,
+    legalName: name,
+    ...(preparedFor.website === undefined ? {} : { website: preparedFor.website }),
+    logoText: preparedFor.logoText ?? initialsForName(name),
+    colors: {
+      primary: "#0f172a",
+      secondary: "#334155",
+      accent,
+      background: "#f8fafc",
+      surface: "#ffffff",
+      text: "#111827",
+      mutedText: "#64748b",
+      border: "#dbe3ef",
+    },
+  } satisfies ProposalBrand;
+}
+
+function buildLatestProjectRenderBundle(
+  version: ProposalProjectVersion,
+  input: unknown,
+): RouteValueResult<ProposalRenderBundle> {
+  return buildProposalRenderBundle(buildLatestProjectRenderInput(version, input));
+}
+
+function buildLatestProjectRenderInput(
+  version: ProposalProjectVersion,
+  input: unknown,
+): Readonly<Record<string, unknown>> {
+  const requestInput = isRecord(input) ? input : {};
+  const requestedBrand =
+    readOptionalUnknown(requestInput, "brand") ?? readOptionalUnknown(requestInput, "brandId");
+  return {
+    ...requestInput,
+    draft: version.sourceOfTruth.draft,
+    brand: requestedBrand ?? version.sourceOfTruth.vendorBrand,
+  };
+}
+
+function resolveProposalProjectAuthor(
+  input: Readonly<Record<string, unknown>>,
+): RouteValueResult<ProposalAuthorMetadata> {
+  const rawAuthor =
+    readOptionalUnknown(input, "createdBy") ??
+    readOptionalUnknown(input, "updatedBy") ??
+    readOptionalUnknown(input, "author");
+  if (rawAuthor === undefined) return { ok: true, value: DEFAULT_PROJECT_AUTHOR };
+
+  if (typeof rawAuthor === "string") {
+    const displayName = rawAuthor.trim();
+    if (displayName.length === 0) {
+      return routeFailure(
+        failureResponse(400, "author_invalid", "author must be a non-empty string when provided."),
+      );
+    }
+    return {
+      ok: true,
+      value: createProposalAuthorMetadata({
+        authorId: slugifyRouteIdentifier(displayName, "author"),
+        displayName,
+        kind: "human",
+      }),
+    };
+  }
+
+  if (!isRecord(rawAuthor)) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "author_invalid",
+        "createdBy must be author metadata or a display name.",
+      ),
+    );
+  }
+
+  const errors: string[] = [];
+  const authorId = readRequiredAuthorString(rawAuthor, "authorId", errors);
+  const displayName = readRequiredAuthorString(rawAuthor, "displayName", errors);
+  const kind = readRequiredAuthorKind(rawAuthor.kind, errors);
+  const email = readOptionalAuthorString(rawAuthor, "email", errors);
+  const organization = readOptionalAuthorString(rawAuthor, "organization", errors);
+
+  if (errors.length > 0 || authorId === null || displayName === null || kind === null) {
+    return routeFailure(
+      failureResponse(400, "author_invalid", "Author metadata is invalid.", errors),
+    );
+  }
+
+  return {
+    ok: true,
+    value: createProposalAuthorMetadata({
+      authorId,
+      displayName,
+      kind,
+      ...(email === undefined ? {} : { email }),
+      ...(organization === undefined ? {} : { organization }),
+    }),
+  };
+}
+
+function readRequiredAuthorString(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+  errors: string[],
+): string | null {
+  const value = input[key];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    errors.push(`${key}: Must be a non-empty string.`);
+    return null;
+  }
+  return value.trim();
+}
+
+function readOptionalAuthorString(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+  errors: string[],
+): string | undefined {
+  const value = input[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    errors.push(`${key}: Must be a non-empty string when provided.`);
+    return undefined;
+  }
+  return value.trim();
+}
+
+function readRequiredAuthorKind(input: unknown, errors: string[]): ProposalAuthorKind | null {
+  if (isProposalAuthorKind(input)) return input;
+  errors.push(`kind: Must be one of: ${PROPOSAL_AUTHOR_KINDS.join(", ")}.`);
+  return null;
+}
+
+function resolveRequiredBaseVersionId(
+  input: Readonly<Record<string, unknown>>,
+): RouteValueResult<ProposalProjectVersionId> {
+  const rawBaseVersionId =
+    readOptionalUnknown(input, "baseVersionId") ?? readOptionalUnknown(input, "baseVersion");
+  if (typeof rawBaseVersionId !== "string" || rawBaseVersionId.trim().length === 0) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "base_version_required",
+        "baseVersionId must identify the latest version the update is based on.",
+      ),
+    );
+  }
+  return { ok: true, value: toProposalProjectVersionId(rawBaseVersionId.trim()) };
+}
+
+function resolveOptionalProjectId(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+): RouteValueResult<ProposalProjectId | undefined> {
+  const value = readOptionalRouteString(input, key, `${key}_invalid`, key);
+  if (!value.ok) return value;
+  return {
+    ok: true,
+    value: value.value === undefined ? undefined : toProposalProjectId(value.value),
+  };
+}
+
+function resolveOptionalProjectVersionId(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+): RouteValueResult<ProposalProjectVersionId | undefined> {
+  const value = readOptionalRouteString(input, key, `${key}_invalid`, key);
+  if (!value.ok) return value;
+  return {
+    ok: true,
+    value: value.value === undefined ? undefined : toProposalProjectVersionId(value.value),
+  };
+}
+
+function resolveOptionalProjectStatus(
+  input: Readonly<Record<string, unknown>>,
+): RouteValueResult<ProposalProjectStatus | undefined> {
+  const rawStatus = readOptionalUnknown(input, "status");
+  if (rawStatus === undefined) return { ok: true, value: undefined };
+  if (isProposalProjectStatus(rawStatus)) return { ok: true, value: rawStatus };
+  return routeFailure(
+    failureResponse(
+      400,
+      "status_invalid",
+      `status must be one of: ${PROPOSAL_PROJECT_STATUSES.join(", ")}.`,
+    ),
+  );
+}
+
+function resolveOptionalProjectVersionSource(
+  input: Readonly<Record<string, unknown>>,
+): RouteValueResult<ProposalProjectVersionSource | undefined> {
+  const rawSource = readOptionalUnknown(input, "source");
+  if (rawSource === undefined) return { ok: true, value: undefined };
+  if (isProposalProjectVersionSource(rawSource)) return { ok: true, value: rawSource };
+  return routeFailure(
+    failureResponse(
+      400,
+      "source_invalid",
+      `source must be one of: ${PROPOSAL_PROJECT_VERSION_SOURCES.join(", ")}.`,
+    ),
+  );
+}
+
+function readOptionalRouteString(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+  code: string,
+  label: string,
+): RouteValueResult<string | undefined> {
+  const rawValue = readOptionalUnknown(input, key);
+  if (rawValue === undefined) return { ok: true, value: undefined };
+  if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
+    return routeFailure(failureResponse(400, code, `${label} must be a non-empty string.`));
+  }
+  return { ok: true, value: rawValue.trim() };
+}
+
+function currentProjectVersionResult(
+  project: ProposalProject,
+): RouteValueResult<ProposalProjectVersion> {
+  const currentVersion = getCurrentProjectVersion(project);
+  if (currentVersion !== null) return { ok: true, value: currentVersion };
+  return routeFailure(
+    failureResponse(
+      500,
+      "project_state_invalid",
+      "Proposal project currentVersionId does not reference a stored version.",
+      [`projectId: ${project.projectId}`, `currentVersionId: ${project.currentVersionId}`],
+    ),
+  );
+}
+
+function proposalProjectNotFoundResponse(projectId: ProposalProjectId): ApiRouteResponse {
+  return failureResponse(404, "project_not_found", `Proposal project was not found: ${projectId}.`);
+}
+
+function projectStoreWriteFailureResponse(code: string, error: unknown): ApiRouteResponse {
+  logError(`scopeforge.route.${code}`, error);
+  const message = error instanceof Error ? error.message : String(error);
+  return failureResponse(500, code, "Proposal project storage write failed.", [message]);
+}
+
+function appendNestedValidationErrors(
+  errors: ProposalValidationError[],
+  prefix: string,
+  nestedErrors: readonly ProposalValidationError[],
+): void {
+  for (const error of nestedErrors) {
+    errors.push({ path: routeNestedPath(prefix, error.path), message: error.message });
+  }
+}
+
+function routeNestedPath(parentPath: string, childPath: string): string {
+  if (childPath === "$") return parentPath;
+  return `${parentPath}.${childPath}`;
+}
+
+function methodNotAllowedResponse(allow: string, message: string): ApiRouteResponse {
+  const response = failureResponse(405, "method_not_allowed", message, [`allow: ${allow}`]);
+  return { ...response, headers: { ...response.headers, Allow: allow } };
+}
+
+function parseProposalProjectRoute(pathname: string): ProposalProjectRoute | null {
+  const segments = pathname
+    .slice(API_PREFIX.length)
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  const routeName = segments[0];
+  if (routeName === undefined || !isProposalProjectRouteName(routeName)) return null;
+  if (segments.length === 1) return { action: "collection" };
+
+  const rawProjectId = segments[1];
+  if (rawProjectId === undefined || rawProjectId.trim().length === 0) return null;
+  const projectId = toProposalProjectId(decodeRouteSegment(rawProjectId) ?? rawProjectId);
+  if (segments.length === 2) return { action: "state", projectId };
+
+  const action = segments[2];
+  if (segments.length !== 3 || action === undefined) return null;
+  switch (action) {
+    case "versions":
+      return { action: "versions", projectId };
+    case "preview":
+      return { action: "preview", projectId };
+    case "export":
+    case "export-pdf":
+      return { action: "exportPdf", projectId };
+    default:
+      return null;
+  }
+}
+
+function isProposalProjectRouteName(input: string): boolean {
+  return PROPOSAL_PROJECT_ROUTE_NAMES.some((routeName) => routeName === input);
+}
+
+function isProposalProjectStatus(input: unknown): input is ProposalProjectStatus {
+  return typeof input === "string" && PROPOSAL_PROJECT_STATUSES.some((status) => status === input);
+}
+
+function isProposalProjectVersionSource(input: unknown): input is ProposalProjectVersionSource {
+  return (
+    typeof input === "string" && PROPOSAL_PROJECT_VERSION_SOURCES.some((source) => source === input)
+  );
+}
+
+function isProposalAuthorKind(input: unknown): input is ProposalAuthorKind {
+  return typeof input === "string" && PROPOSAL_AUTHOR_KINDS.some((kind) => kind === input);
+}
+
+function decodeRouteSegment(input: string): string | null {
+  try {
+    return decodeURIComponent(input);
+  } catch {
+    return null;
+  }
+}
+
+function initialsForName(input: string): string {
+  const initials = input
+    .split(/\s+/)
+    .map((part) => part[0])
+    .filter((part): part is string => part !== undefined)
+    .join("")
+    .slice(0, 4)
+    .toUpperCase();
+  return initials.length === 0 ? "CL" : initials;
+}
+
+function slugifyRouteIdentifier(input: string, fallback: string): string {
+  const slug = input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug.length === 0 ? fallback : slug;
+}
+
 function healthResponse(agentSummary?: AgentConfigSummary): ApiRouteResponse {
   return jsonResponse(200, {
     ok: true,
@@ -214,6 +1220,13 @@ function healthResponse(agentSummary?: AgentConfigSummary): ApiRouteResponse {
       "proposal.analyze",
       "proposal.previewHtml",
       "proposal.exportPdf",
+      "proposalProject.create",
+      "proposalProject.list",
+      "proposalProject.latestState",
+      "proposalProject.versionHistory",
+      "proposalProject.updateWithBaseVersion",
+      "proposalProject.previewLatest",
+      "proposalProject.exportLatestPdf",
       "brand.listBuiltIns",
       "brand.validate",
       "brand.extractWebsite",
