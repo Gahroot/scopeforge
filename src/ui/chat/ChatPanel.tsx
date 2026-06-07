@@ -9,6 +9,7 @@ export interface ChatPanelProps {
   readonly agent: AgentStreamApi;
   readonly agentEnabled: boolean;
   readonly displayName: string | null;
+  readonly projectId: string | null;
   readonly vendorBrand: ProposalBrand | null;
   readonly clientBrand: ProposalBrand | null;
 }
@@ -17,6 +18,7 @@ export function ChatPanel({
   agent,
   agentEnabled,
   displayName,
+  projectId,
   vendorBrand,
   clientBrand,
 }: ChatPanelProps): JSX.Element {
@@ -25,6 +27,7 @@ export function ChatPanel({
 
   const sendOptions = {
     ...(displayName === null ? {} : { displayName }),
+    ...(projectId === null ? {} : { projectId }),
     ...(vendorBrand === null ? {} : { vendorBrand }),
     ...(clientBrand === null ? {} : { clientBrand }),
   };

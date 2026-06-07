@@ -2,14 +2,32 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2, X } from "lucide-react";
 import { Button } from "../components/ui/button.js";
 import { Input } from "../components/ui/input.js";
-import { extractBrand } from "../lib/api.js";
+import { extractBrand, importProjectBrand } from "../lib/api.js";
+import type {
+  ProposalProject,
+  ProposalProjectSourceOfTruth,
+  ProposalProjectVersion,
+} from "../../project/types.js";
 import type { ProposalBrand } from "../../proposal/types.js";
 
 export type BrandRole = "vendor" | "client";
 
+export interface BrandImportProjectUpdate {
+  readonly project: ProposalProject;
+  readonly currentVersion: ProposalProjectVersion;
+  readonly sourceOfTruth: ProposalProjectSourceOfTruth;
+}
+
 export interface BrandImportDialogProps {
   readonly role: BrandRole;
-  readonly onImported: (role: BrandRole, brand: ProposalBrand) => void;
+  readonly projectId: string | null;
+  readonly baseVersionId: string | null;
+  readonly displayName: string | null;
+  readonly onImported: (
+    role: BrandRole,
+    brand: ProposalBrand,
+    projectUpdate?: BrandImportProjectUpdate,
+  ) => void;
   readonly onClose: () => void;
 }
 
@@ -26,6 +44,9 @@ const ROLE_COPY: Readonly<Record<BrandRole, { title: string; help: string }>> = 
 
 export function BrandImportDialog({
   role,
+  projectId,
+  baseVersionId,
+  displayName,
   onImported,
   onClose,
 }: BrandImportDialogProps): JSX.Element {
@@ -54,13 +75,29 @@ export function BrandImportDialog({
     }
     setBusy(true);
     setError(null);
-    const result = await extractBrand(trimmed);
+    if (projectId === null || baseVersionId === null) {
+      const result = await extractBrand(trimmed);
+      setBusy(false);
+      if (!result.ok) {
+        setError(result.error.message);
+        return;
+      }
+      onImported(role, result.value.brand);
+      onClose();
+      return;
+    }
+
+    const result = await importProjectBrand(projectId, baseVersionId, role, trimmed, displayName);
     setBusy(false);
     if (!result.ok) {
       setError(result.error.message);
       return;
     }
-    onImported(role, result.value.brand);
+    onImported(role, result.value.brand, {
+      project: result.value.project,
+      currentVersion: result.value.currentVersion,
+      sourceOfTruth: result.value.sourceOfTruth,
+    });
     onClose();
   }
 

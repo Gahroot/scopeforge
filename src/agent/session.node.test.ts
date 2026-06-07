@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { BUILT_IN_BRANDS } from "../proposal/brands.js";
-import { createProposalAuthorMetadata } from "../project/state.js";
+import {
+  createProposalAuthorMetadata,
+  toProposalProjectId,
+  toProposalProjectVersionId,
+} from "../project/state.js";
 import {
   DEFAULT_SESSION_AUTHOR,
   applyClientBrandToSession,
   buildSessionSnapshot,
   createSessionStore,
+  createStarterDraft,
   resolveSessionVendorBrand,
   type AgentSession,
 } from "./session.node.js";
@@ -22,6 +27,38 @@ describe("createSessionStore", () => {
     expect(session.createdBy).toEqual(DEFAULT_SESSION_AUTHOR);
     expect(snapshot.author.displayName).toBe("Local collaborator");
     expect(snapshot.author.kind).toBe("human");
+  });
+
+  it("starts fresh sessions from the selected project brand profiles", () => {
+    const draft = {
+      ...createStarterDraft(),
+      preparedFor: {
+        companyName: BUILT_IN_BRANDS.partners.name,
+        website: BUILT_IN_BRANDS.partners.website,
+        logoText: BUILT_IN_BRANDS.partners.logoText,
+        accentColor: BUILT_IN_BRANDS.partners.colors.accent,
+      },
+    };
+    const session = createSessionStore({ idFactory: () => "project-session" }).create({
+      projectContext: {
+        projectId: toProposalProjectId("project-brand-context"),
+        versionId: toProposalProjectVersionId("version-brand-context"),
+        sourceOfTruth: {
+          draft,
+          vendorBrand: BUILT_IN_BRANDS.nolan,
+          clientBrand: BUILT_IN_BRANDS.partners,
+        },
+      },
+    });
+    const snapshot = buildSessionSnapshot(session);
+
+    expect(session.projectId).toBe("project-brand-context");
+    expect(session.projectVersionId).toBe("version-brand-context");
+    expect(session.vendorBrand).toEqual(BUILT_IN_BRANDS.nolan);
+    expect(session.clientBrand).toEqual(BUILT_IN_BRANDS.partners);
+    expect(snapshot.projectId).toBe("project-brand-context");
+    expect(snapshot.projectVersionId).toBe("version-brand-context");
+    expect(snapshot.fullDraft.preparedFor.companyName).toBe(BUILT_IN_BRANDS.partners.name);
   });
 
   it("records a provided collaborator as the session author", () => {

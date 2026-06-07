@@ -6,6 +6,7 @@ import type { WebsiteBrandLookup } from "../brand/types.js";
 import { tritenExample } from "../data/defaults.js";
 import {
   createProposalAuthorMetadata,
+  getCurrentProjectVersion,
   toProposalProjectId,
   toProposalProjectVersionId,
 } from "../project/state.js";
@@ -36,6 +37,11 @@ function htmlResponse(html: string, init: ResponseInit = {}): Response {
     },
   });
 }
+
+const acmeBrandFetch: typeof fetch = async (input) => {
+  expect(String(input)).toBe("https://acme.example/");
+  return htmlResponse(acmeWebsiteHtml);
+};
 
 const PROJECT_ROUTE_CREATED_AT = "2026-06-07T12:00:00.000Z";
 const PROJECT_ROUTE_UPDATED_AT = "2026-06-07T13:00:00.000Z";
@@ -513,6 +519,227 @@ describe("server API routes", () => {
       expect(binary.body).toEqual(pdfBytes);
       expect(binary.headers["Content-Disposition"]).toBe('attachment; filename="Acme Project.pdf"');
     });
+  });
+
+  it("persists imported vendor brands on the selected project with extraction provenance", async () => {
+    await withProjectRouteStore(async (store) => {
+      const createResponse = await handleApiRoute(
+        {
+          method: "POST",
+          pathname: "/api/proposal-projects",
+          body: {
+            draft: projectRouteDraft("Vendor Brand Import Pilot", 1),
+            brand: BUILT_IN_BRANDS.nolan,
+            clientBrand: BUILT_IN_BRANDS.partners,
+            createdBy: projectRouteAuthor,
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const createdProject = readRecordField(expectJson(createResponse).body, "project");
+      const projectId = readStringField(createdProject, "projectId");
+      const initialVersionId = readStringField(createdProject, "currentVersionId");
+
+      const importResponse = await handleApiRoute(
+        {
+          method: "POST",
+          pathname: `/api/proposal-projects/${projectId}/brands/import`,
+          body: {
+            role: "vendor",
+            url: "acme.example",
+            baseVersionId: initialVersionId,
+            createdBy: projectRouteAuthor,
+          },
+        },
+        {
+          proposalProjectStore: store,
+          brandFetch: acmeBrandFetch,
+          brandLookupHost: routeBrandLookup,
+          brandNow: () => new Date("2026-01-01T00:00:00.000Z"),
+        },
+      );
+      const importJson = expectJson(importResponse);
+      const updatedProject = readRecordField(importJson.body, "project");
+      const sourceOfTruth = readRecordField(importJson.body, "sourceOfTruth");
+      const vendorBrand = readRecordField(sourceOfTruth, "vendorBrand");
+      const clientBrand = readRecordField(sourceOfTruth, "clientBrand");
+      const updatedVersion = readRecordField(importJson.body, "currentVersion");
+      const updatedVersionId = readStringField(updatedVersion, "versionId");
+      const snapshots = readArrayField(updatedProject, "brandSnapshots");
+
+      expect(importJson.status).toBe(200);
+      expect(readStringField(vendorBrand, "id")).toBe("acme-growth-studio");
+      expect(readStringField(clientBrand, "id")).toBe("partners");
+      expect(readArrayField(updatedProject, "versions")).toHaveLength(2);
+      expect(readStringField(updatedVersion, "source")).toBe("import");
+      expect(snapshots).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "vendor",
+            sourceVersionId: updatedVersionId,
+            brand: expect.objectContaining({ id: "acme-growth-studio" }),
+            provenance: expect.objectContaining({
+              kind: "website-brand-extraction",
+              role: "vendor",
+              source: expect.objectContaining({
+                requestedUrl: "acme.example",
+                finalUrl: "https://acme.example/",
+                extractor: "scopeforge.websiteBrand.node",
+              }),
+              sources: expect.objectContaining({ name: expect.any(Object) }),
+            }),
+          }),
+        ]),
+      );
+
+      const persisted = store.get(toProposalProjectId(projectId));
+      if (persisted === null) throw new Error("Expected persisted project after brand import.");
+      const persistedVersion = getCurrentProjectVersion(persisted);
+      expect(persistedVersion?.sourceOfTruth.vendorBrand.id).toBe("acme-growth-studio");
+    });
+  });
+
+  it("persists imported client brands and keeps seeding preparedFor", async () => {
+    await withProjectRouteStore(async (store) => {
+      const createResponse = await handleApiRoute(
+        {
+          method: "POST",
+          pathname: "/api/proposal-projects",
+          body: {
+            draft: projectRouteDraft("Client Brand Import Pilot", 1),
+            brand: BUILT_IN_BRANDS.nolan,
+            clientBrand: BUILT_IN_BRANDS.partners,
+            createdBy: projectRouteAuthor,
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const createdProject = readRecordField(expectJson(createResponse).body, "project");
+      const projectId = readStringField(createdProject, "projectId");
+      const initialVersionId = readStringField(createdProject, "currentVersionId");
+
+      const importResponse = await handleApiRoute(
+        {
+          method: "POST",
+          pathname: `/api/proposal-projects/${projectId}/brands/import`,
+          body: {
+            role: "client",
+            url: "acme.example",
+            baseVersionId: initialVersionId,
+            createdBy: projectRouteAuthor,
+          },
+        },
+        {
+          proposalProjectStore: store,
+          brandFetch: acmeBrandFetch,
+          brandLookupHost: routeBrandLookup,
+          brandNow: () => new Date("2026-01-01T00:00:00.000Z"),
+        },
+      );
+      const importJson = expectJson(importResponse);
+      const updatedProject = readRecordField(importJson.body, "project");
+      const sourceOfTruth = readRecordField(importJson.body, "sourceOfTruth");
+      const draft = readRecordField(sourceOfTruth, "draft");
+      const preparedFor = readRecordField(draft, "preparedFor");
+      const vendorBrand = readRecordField(sourceOfTruth, "vendorBrand");
+      const clientBrand = readRecordField(sourceOfTruth, "clientBrand");
+      const updatedVersion = readRecordField(importJson.body, "currentVersion");
+      const updatedVersionId = readStringField(updatedVersion, "versionId");
+      const snapshots = readArrayField(updatedProject, "brandSnapshots");
+
+      expect(importJson.status).toBe(200);
+      expect(readStringField(vendorBrand, "id")).toBe("nolan");
+      expect(readStringField(clientBrand, "id")).toBe("acme-growth-studio");
+      expect(readStringField(preparedFor, "companyName")).toBe("Acme Growth Studio");
+      expect(readStringField(preparedFor, "website")).toBe("https://acme.example/home");
+      expect(readStringField(preparedFor, "logoText")).toBe("AG");
+      expect(readStringField(preparedFor, "accentColor")).toBe("#f97316");
+      expect(readArrayField(updatedProject, "versions")).toHaveLength(2);
+      expect(snapshots).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "client",
+            sourceVersionId: updatedVersionId,
+            brand: expect.objectContaining({ id: "acme-growth-studio" }),
+            provenance: expect.objectContaining({
+              kind: "website-brand-extraction",
+              role: "client",
+              source: expect.objectContaining({ finalUrl: "https://acme.example/" }),
+            }),
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("recovers persisted imported brands after a server restart", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "scopeforge-routes-restart-"));
+    try {
+      const store = projectRouteStore(dataDir);
+      const createResponse = await handleApiRoute(
+        {
+          method: "POST",
+          pathname: "/api/proposal-projects",
+          body: {
+            draft: projectRouteDraft("Restart Brand Import Pilot", 1),
+            brand: BUILT_IN_BRANDS.nolan,
+            clientBrand: BUILT_IN_BRANDS.partners,
+            createdBy: projectRouteAuthor,
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const createdProject = readRecordField(expectJson(createResponse).body, "project");
+      const projectId = readStringField(createdProject, "projectId");
+      const initialVersionId = readStringField(createdProject, "currentVersionId");
+
+      await handleApiRoute(
+        {
+          method: "POST",
+          pathname: `/api/proposal-projects/${projectId}/brands/import`,
+          body: {
+            role: "vendor",
+            url: "acme.example",
+            baseVersionId: initialVersionId,
+            createdBy: projectRouteAuthor,
+          },
+        },
+        {
+          proposalProjectStore: store,
+          brandFetch: acmeBrandFetch,
+          brandLookupHost: routeBrandLookup,
+          brandNow: () => new Date("2026-01-01T00:00:00.000Z"),
+        },
+      );
+
+      const restartedStore = projectRouteStore(dataDir);
+      const stateResponse = await handleApiRoute(
+        { method: "GET", pathname: `/api/proposal-projects/${projectId}` },
+        { proposalProjectStore: restartedStore },
+      );
+      const stateJson = expectJson(stateResponse);
+      const sourceOfTruth = readRecordField(stateJson.body, "sourceOfTruth");
+      const vendorBrand = readRecordField(sourceOfTruth, "vendorBrand");
+      const reloadedProject = readRecordField(stateJson.body, "project");
+      const snapshots = readArrayField(reloadedProject, "brandSnapshots");
+
+      expect(stateJson.status).toBe(200);
+      expect(readStringField(vendorBrand, "id")).toBe("acme-growth-studio");
+      expect(readArrayField(reloadedProject, "versions")).toHaveLength(2);
+      expect(snapshots).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "vendor",
+            brand: expect.objectContaining({ id: "acme-growth-studio" }),
+            provenance: expect.objectContaining({
+              source: expect.objectContaining({ finalUrl: "https://acme.example/" }),
+            }),
+          }),
+        ]),
+      );
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
   });
 
   it("records collaborator authors on project versions and falls back to a local label", async () => {

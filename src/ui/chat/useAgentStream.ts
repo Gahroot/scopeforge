@@ -31,7 +31,13 @@ export interface AgentStreamApi {
     message: string,
     options?: Pick<
       AgentMessageRequest,
-      "brandId" | "audience" | "author" | "displayName" | "vendorBrand" | "clientBrand"
+      | "projectId"
+      | "brandId"
+      | "audience"
+      | "author"
+      | "displayName"
+      | "vendorBrand"
+      | "clientBrand"
     >,
   ): Promise<void>;
   stop(): void;
@@ -65,7 +71,13 @@ export function useAgentStream(): AgentStreamApi {
       text: string,
       options?: Pick<
         AgentMessageRequest,
-        "brandId" | "audience" | "author" | "displayName" | "vendorBrand" | "clientBrand"
+        | "projectId"
+        | "brandId"
+        | "audience"
+        | "author"
+        | "displayName"
+        | "vendorBrand"
+        | "clientBrand"
       >,
     ): Promise<void> => {
       if (status !== "idle") return;
@@ -83,6 +95,7 @@ export function useAgentStream(): AgentStreamApi {
       const requestBody: AgentMessageRequest = {
         message: text,
         ...(sessionIdRef.current === null ? {} : { sessionId: sessionIdRef.current }),
+        ...(options?.projectId === undefined ? {} : { projectId: options.projectId }),
         ...(options?.brandId === undefined ? {} : { brandId: options.brandId }),
         ...(options?.audience === undefined ? {} : { audience: options.audience }),
         ...(options?.author === undefined ? {} : { author: options.author }),

@@ -5,12 +5,27 @@ import { errorFrame, runProposalAgentStream } from "../agent/proposalAgentServic
 import {
   DEFAULT_SESSION_AUTHOR,
   applyClientBrandToSession,
+  applyProjectContextToSession,
   resolveSessionBrandId,
   type AgentSession,
+  type SessionProjectContext,
   type SessionStore,
 } from "../agent/session.node.js";
-import { createProposalAuthorMetadata } from "../project/state.js";
-import type { ProposalAuthorKind, ProposalAuthorMetadata } from "../project/types.js";
+import {
+  createProposalAuthorMetadata,
+  getCurrentProjectVersion,
+  toProposalProjectId,
+} from "../project/state.js";
+import {
+  createLocalProposalProjectStore,
+  type ProposalProjectStoreLoadResult,
+} from "../project/store.node.js";
+import type {
+  ProposalAuthorKind,
+  ProposalAuthorMetadata,
+  ProposalProject,
+  ProposalProjectId,
+} from "../project/types.js";
 import { validateProposalBrand } from "../proposal/brands.js";
 import type { AgentStreamFrame } from "../ui/lib/types.js";
 import type { ProposalAudience, ProposalBrand } from "../proposal/types.js";
@@ -33,6 +48,7 @@ export function encodeSseFrame(frame: AgentStreamFrame): string {
 interface AgentMessageInput {
   readonly sessionId?: string;
   readonly message: string;
+  readonly projectId?: ProposalProjectId;
   readonly brandId?: string;
   readonly audience?: ProposalAudience;
   readonly author?: ProposalAuthorMetadata;
@@ -69,6 +85,11 @@ type ParseResult =
   | { readonly ok: true; readonly value: AgentMessageInput }
   | { readonly ok: false; readonly message: string };
 
+export interface AgentProposalProjectStore {
+  readonly load?: () => Promise<ProposalProjectStoreLoadResult>;
+  readonly get: (projectId: ProposalProjectId) => ProposalProject | null;
+}
+
 export function parseAgentMessageBody(body: unknown): ParseResult {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return { ok: false, message: "Request body must be a JSON object." };
@@ -89,6 +110,9 @@ export function parseAgentMessageBody(body: unknown): ParseResult {
     value: {
       message: message.trim(),
       ...(typeof record.sessionId === "string" ? { sessionId: record.sessionId } : {}),
+      ...(typeof record.projectId === "string" && record.projectId.trim().length > 0
+        ? { projectId: toProposalProjectId(record.projectId.trim()) }
+        : {}),
       ...(typeof record.brandId === "string" ? { brandId: record.brandId } : {}),
       ...(audience === undefined ? {} : { audience }),
       ...(author.value === undefined ? {} : { author: author.value }),
@@ -203,9 +227,104 @@ function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
+type ProjectContextResult =
+  | { readonly ok: true; readonly value?: SessionProjectContext }
+  | {
+      readonly ok: false;
+      readonly status: number;
+      readonly error: {
+        readonly code: string;
+        readonly message: string;
+        readonly details?: readonly string[];
+      };
+    };
+
+async function resolveSelectedProjectContext(
+  projectId: ProposalProjectId | undefined,
+  options: AgentStreamHandlerOptions,
+): Promise<ProjectContextResult> {
+  if (projectId === undefined) return { ok: true };
+
+  const store = options.proposalProjectStore ?? createLocalProposalProjectStore();
+  if (store.load !== undefined) {
+    try {
+      const load = await store.load();
+      if (!load.ok) {
+        return {
+          ok: false,
+          status: 503,
+          error: {
+            code: "project_store_load_failed",
+            message: "Proposal project storage could not be loaded safely.",
+            details: projectStoreLoadDetails(load),
+          },
+        };
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        status: 503,
+        error: {
+          code: "project_store_unavailable",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  }
+
+  const project = store.get(projectId);
+  if (project === null) {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "project_not_found",
+        message: `Proposal project was not found: ${projectId}.`,
+      },
+    };
+  }
+
+  const version = getCurrentProjectVersion(project);
+  if (version === null) {
+    return {
+      ok: false,
+      status: 500,
+      error: {
+        code: "project_state_invalid",
+        message: "Proposal project currentVersionId does not reference a stored version.",
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      projectId: project.projectId,
+      versionId: version.versionId,
+      sourceOfTruth: version.sourceOfTruth,
+    },
+  };
+}
+
+function projectStoreLoadDetails(load: ProposalProjectStoreLoadResult): readonly string[] {
+  if (load.ok) return [];
+  return load.errors.map((error) => `${error.code}: ${error.path}: ${error.message}`);
+}
+
+function shouldHydrateProjectContext(
+  session: AgentSession,
+  projectContext: SessionProjectContext,
+): boolean {
+  if (session.projectId === undefined) return true;
+  if (session.projectId !== projectContext.projectId) return session.messages.length === 0;
+  if (session.projectVersionId === projectContext.versionId) return false;
+  return session.messages.length === 0;
+}
+
 export interface AgentStreamHandlerOptions {
   readonly config: EnabledAgentConfig;
   readonly sessions: SessionStore;
+  readonly proposalProjectStore?: AgentProposalProjectStore;
 }
 
 /**
@@ -227,13 +346,29 @@ export async function handleAgentMessages(
     return;
   }
 
+  const projectContext = await resolveSelectedProjectContext(parsed.value.projectId, options);
+  if (!projectContext.ok) {
+    response.writeHead(projectContext.status, {
+      "Content-Type": "application/json; charset=utf-8",
+    });
+    response.end(JSON.stringify({ ok: false, error: projectContext.error }));
+    return;
+  }
+
   const session = options.sessions.getOrCreate(parsed.value.sessionId, {
     ...(parsed.value.brandId === undefined
       ? {}
       : { brandId: resolveSessionBrandId(parsed.value.brandId) }),
     ...(parsed.value.audience === undefined ? {} : { audience: parsed.value.audience }),
     ...(parsed.value.author === undefined ? {} : { author: parsed.value.author }),
+    ...(projectContext.value === undefined ? {} : { projectContext: projectContext.value }),
   });
+  if (
+    projectContext.value !== undefined &&
+    shouldHydrateProjectContext(session, projectContext.value)
+  ) {
+    applyProjectContextToSession(session, projectContext.value);
+  }
   if (parsed.value.brandId !== undefined) {
     session.brandId = resolveSessionBrandId(parsed.value.brandId);
   }

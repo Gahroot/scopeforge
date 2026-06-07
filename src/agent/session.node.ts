@@ -13,7 +13,12 @@ import { leadPrice } from "../core/pricing.js";
 import { getClientBlockingWarnings } from "../proposal/model.js";
 import { proposalDraftToIntake, validateProposalDraft } from "../proposal/schema.js";
 import { createProposalAuthorMetadata } from "../project/state.js";
-import type { ProposalAuthorMetadata } from "../project/types.js";
+import type {
+  ProposalAuthorMetadata,
+  ProposalProjectId,
+  ProposalProjectSourceOfTruth,
+  ProposalProjectVersionId,
+} from "../project/types.js";
 import type {
   ProposalAudience,
   ProposalBrand,
@@ -44,6 +49,8 @@ export interface AgentSession {
   brandId: string;
   audience: ProposalAudience;
   createdBy: ProposalAuthorMetadata;
+  projectId?: ProposalProjectId;
+  projectVersionId?: ProposalProjectVersionId;
   /** Imported vendor brand ("My brand"); null until imported. */
   vendorBrand: ProposalBrand | null;
   /** Imported client brand ("Prepared for"); null until imported. */
@@ -51,10 +58,17 @@ export interface AgentSession {
   abort: AbortController | null;
 }
 
+export interface SessionProjectContext {
+  readonly projectId: ProposalProjectId;
+  readonly versionId: ProposalProjectVersionId;
+  readonly sourceOfTruth: ProposalProjectSourceOfTruth;
+}
+
 export interface SessionCreateOptions {
   readonly brandId?: string;
   readonly audience?: ProposalAudience;
   readonly author?: ProposalAuthorMetadata;
+  readonly projectContext?: SessionProjectContext;
 }
 
 export interface SessionStore {
@@ -73,17 +87,22 @@ export function createSessionStore(dependencies: SessionStoreDependencies = {}):
 
   function create(options: SessionCreateOptions = {}): AgentSession {
     const id = idFactory();
+    const projectContext = options.projectContext;
     const session: AgentSession = {
       id,
-      store: createProposalDraftStore(createStarterDraft(), { label: "Agent session start" }),
+      store: createInitialSessionDraftStore(projectContext),
       messages: [],
-      brandId: options.brandId ?? DEFAULT_BRAND_ID,
+      brandId: options.brandId ?? projectContext?.sourceOfTruth.vendorBrand.id ?? DEFAULT_BRAND_ID,
       audience: options.audience ?? "client",
       createdBy: options.author ?? DEFAULT_SESSION_AUTHOR,
-      vendorBrand: null,
-      clientBrand: null,
+      ...(projectContext === undefined
+        ? {}
+        : { projectId: projectContext.projectId, projectVersionId: projectContext.versionId }),
+      vendorBrand: projectContext?.sourceOfTruth.vendorBrand ?? null,
+      clientBrand: projectContext?.sourceOfTruth.clientBrand ?? null,
       abort: null,
     };
+
     sessions.set(id, session);
     return session;
   }
@@ -101,6 +120,29 @@ export function createSessionStore(dependencies: SessionStoreDependencies = {}):
   }
 
   return { create, get, getOrCreate };
+}
+
+function createInitialSessionDraftStore(
+  projectContext: SessionProjectContext | undefined,
+): ProposalDraftStoreState {
+  if (projectContext === undefined) {
+    return createProposalDraftStore(createStarterDraft(), { label: "Agent session start" });
+  }
+  return createProposalDraftStore(projectContext.sourceOfTruth.draft, {
+    label: "Loaded selected project version",
+  });
+}
+
+export function applyProjectContextToSession(
+  session: AgentSession,
+  projectContext: SessionProjectContext,
+): void {
+  session.projectId = projectContext.projectId;
+  session.projectVersionId = projectContext.versionId;
+  session.store = createInitialSessionDraftStore(projectContext);
+  session.brandId = projectContext.sourceOfTruth.vendorBrand.id;
+  session.vendorBrand = projectContext.sourceOfTruth.vendorBrand;
+  session.clientBrand = projectContext.sourceOfTruth.clientBrand;
 }
 
 export function createStarterDraft(): ProposalDraft {
@@ -134,6 +176,10 @@ export function buildSessionSnapshot(session: AgentSession): SessionSnapshot {
   return {
     sessionId: session.id,
     author: session.createdBy,
+    ...(session.projectId === undefined ? {} : { projectId: session.projectId }),
+    ...(session.projectVersionId === undefined
+      ? {}
+      : { projectVersionId: session.projectVersionId }),
     draft: buildDraftSnapshot(session, draft),
     economics,
     validation,

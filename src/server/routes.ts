@@ -28,6 +28,8 @@ import type {
   CreateProposalProjectInput,
   ProposalAuthorKind,
   ProposalAuthorMetadata,
+  ProposalBrandExtractionProvenance,
+  ProposalBrandRole,
   ProposalProject,
   ProposalProjectId,
   ProposalProjectSourceOfTruth,
@@ -212,7 +214,8 @@ type ProposalProjectRoute =
   | { readonly action: "state"; readonly projectId: ProposalProjectId }
   | { readonly action: "versions"; readonly projectId: ProposalProjectId }
   | { readonly action: "preview"; readonly projectId: ProposalProjectId }
-  | { readonly action: "exportPdf"; readonly projectId: ProposalProjectId };
+  | { readonly action: "exportPdf"; readonly projectId: ProposalProjectId }
+  | { readonly action: "importBrand"; readonly projectId: ProposalProjectId };
 
 interface LoadedProposalProject {
   readonly store: ProposalProjectStore;
@@ -334,6 +337,18 @@ async function handleProposalProjectRoute(
         "POST",
         "Proposal project PDF export requires a POST request.",
       );
+    case "importBrand":
+      if (request.method === "POST") {
+        return importProposalProjectWebsiteBrandResponse(
+          route.projectId,
+          request.body,
+          dependencies,
+        );
+      }
+      return methodNotAllowedResponse(
+        "POST",
+        "Proposal project brand imports require a POST request.",
+      );
   }
 }
 
@@ -434,6 +449,261 @@ async function updateProposalProjectResponse(
   } catch (error) {
     return projectStoreWriteFailureResponse("project_update_failed", error);
   }
+}
+
+async function importProposalProjectWebsiteBrandResponse(
+  projectId: ProposalProjectId,
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const loaded = await loadProposalProject(projectId, dependencies);
+  if (!loaded.ok) return loaded.response;
+
+  const currentVersion = currentProjectVersionResult(loaded.value.project);
+  if (!currentVersion.ok) return currentVersion.response;
+
+  const importInput = resolveProjectBrandImportInput(input, currentVersion.value.versionId);
+  if (!importInput.ok) return importInput.response;
+
+  const extractor = dependencies.extractWebsiteBrand ?? extractWebsiteBrandFromUrl;
+  try {
+    const result = await extractor(
+      importInput.value.extract.url,
+      buildWebsiteBrandExtractOptions(importInput.value.extract, dependencies),
+    );
+    const brandResult = validateProposalBrand(result.proposalBrand);
+    if (!brandResult.ok) {
+      return validationFailureResponse("Extracted brand profile is invalid.", brandResult.errors);
+    }
+
+    const importedAt = importInput.value.createdAt ?? result.source.fetchedAt;
+    const provenance = buildBrandExtractionProvenance(importInput.value.role, result, importedAt);
+    const sourceOfTruth = applyImportedProjectBrand(
+      currentVersion.value.sourceOfTruth,
+      importInput.value.role,
+      brandResult.value,
+    );
+    const brandProvenance = buildBrandProvenanceInput(importInput.value.role, provenance);
+    const label =
+      importInput.value.label ??
+      `${brandRoleLabel(importInput.value.role)} brand import from website`;
+    const reason =
+      importInput.value.reason ??
+      `Imported ${brandRoleLabel(importInput.value.role).toLowerCase()} brand from ${result.source.finalUrl}.`;
+
+    const updated = await updateProjectWithImportedBrand(loaded.value.store, projectId, {
+      sourceOfTruth,
+      createdBy: importInput.value.createdBy,
+      parentVersionId: currentVersion.value.versionId,
+      source: "import",
+      label,
+      reason,
+      brandProvenance,
+      ...(importInput.value.createdAt === undefined
+        ? {}
+        : { createdAt: importInput.value.createdAt }),
+    });
+    if (!updated.ok) return updated.response;
+
+    const updatedVersion = getCurrentProjectVersion(updated.value);
+    return jsonResponse(200, {
+      ok: true,
+      role: importInput.value.role,
+      brand: brandResult.value,
+      provenance,
+      project: updated.value,
+      ...(updatedVersion === null
+        ? {}
+        : { currentVersion: updatedVersion, sourceOfTruth: updatedVersion.sourceOfTruth }),
+      source: result.source,
+      sources: result.sources,
+      meta: result.meta,
+      palette: result.palette,
+      assets: result.assets,
+      favicons: result.favicons,
+      logos: result.logos,
+      ogImages: result.ogImages,
+      colors: result.colors,
+      ...(result.name === undefined ? {} : { name: result.name }),
+      ...(result.tagline === undefined ? {} : { tagline: result.tagline }),
+      ...(result.logoUrl === undefined ? {} : { logoUrl: result.logoUrl }),
+      ...(result.manualOverrides === undefined ? {} : { manualOverrides: result.manualOverrides }),
+    });
+  } catch (error) {
+    logError("scopeforge.route.project_brand_import_failed", error, {
+      projectId,
+      url: importInput.value.extract.url,
+      role: importInput.value.role,
+    });
+    return websiteBrandFailureResponse(error);
+  }
+}
+
+async function updateProjectWithImportedBrand(
+  store: ProposalProjectStore,
+  projectId: ProposalProjectId,
+  input: CommitProposalProjectVersionInput,
+): Promise<RouteValueResult<ProposalProject>> {
+  try {
+    const updated = await store.update(projectId, input);
+    if (updated === null) return routeFailure(proposalProjectNotFoundResponse(projectId));
+    return { ok: true, value: updated };
+  } catch (error) {
+    return routeFailure(projectStoreWriteFailureResponse("project_brand_import_failed", error));
+  }
+}
+
+interface ProjectBrandImportInput {
+  readonly role: ProposalBrandRole;
+  readonly extract: BrandExtractRouteInput;
+  readonly createdBy: ProposalAuthorMetadata;
+  readonly createdAt?: string;
+  readonly label?: string;
+  readonly reason?: string;
+}
+
+function resolveProjectBrandImportInput(
+  input: unknown,
+  currentVersionId: ProposalProjectVersionId,
+): RouteValueResult<ProjectBrandImportInput> {
+  if (!isRecord(input)) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "project_brand_import_request_invalid",
+        "Project brand import request body must be a JSON object.",
+      ),
+    );
+  }
+
+  const role = resolveProjectBrandImportRole(input.role);
+  if (!role.ok) return role;
+
+  const baseVersionId = resolveOptionalProjectBrandImportBaseVersionId(input);
+  if (!baseVersionId.ok) return baseVersionId;
+  if (baseVersionId.value !== undefined && baseVersionId.value !== currentVersionId) {
+    return routeFailure(
+      failureResponse(
+        409,
+        "base_version_conflict",
+        "Project has changed since the provided baseVersionId.",
+        [
+          `provided: ${baseVersionId.value}`,
+          `current: ${currentVersionId}`,
+          "Fetch the latest project state and retry the brand import against the current version.",
+        ],
+      ),
+    );
+  }
+
+  const extract = resolveBrandExtractInput(input);
+  if (!extract.ok) return extract;
+
+  const createdBy = resolveProposalProjectAuthor(input);
+  if (!createdBy.ok) return createdBy;
+
+  const createdAt = readOptionalRouteString(input, "createdAt", "created_at_invalid", "createdAt");
+  if (!createdAt.ok) return createdAt;
+
+  const label = readOptionalRouteString(input, "label", "label_invalid", "label");
+  if (!label.ok) return label;
+
+  const reason = readOptionalRouteString(input, "reason", "reason_invalid", "reason");
+  if (!reason.ok) return reason;
+
+  return {
+    ok: true,
+    value: {
+      role: role.value,
+      extract: extract.value,
+      createdBy: createdBy.value,
+      ...(createdAt.value === undefined ? {} : { createdAt: createdAt.value }),
+      ...(label.value === undefined ? {} : { label: label.value }),
+      ...(reason.value === undefined ? {} : { reason: reason.value }),
+    },
+  };
+}
+
+function resolveProjectBrandImportRole(input: unknown): RouteValueResult<ProposalBrandRole> {
+  if (input === "vendor" || input === "client") return { ok: true, value: input };
+  return routeFailure(
+    failureResponse(400, "brand_role_invalid", "role must be either vendor or client."),
+  );
+}
+
+function resolveOptionalProjectBrandImportBaseVersionId(
+  input: Readonly<Record<string, unknown>>,
+): RouteValueResult<ProposalProjectVersionId | undefined> {
+  const rawBaseVersionId =
+    readOptionalUnknown(input, "baseVersionId") ?? readOptionalUnknown(input, "baseVersion");
+  if (rawBaseVersionId === undefined) return { ok: true, value: undefined };
+  if (typeof rawBaseVersionId !== "string" || rawBaseVersionId.trim().length === 0) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "base_version_invalid",
+        "baseVersionId must be a non-empty string when provided.",
+      ),
+    );
+  }
+  return { ok: true, value: toProposalProjectVersionId(rawBaseVersionId.trim()) };
+}
+
+function buildBrandExtractionProvenance(
+  role: ProposalBrandRole,
+  result: WebsiteBrandExtractionResult,
+  importedAt: string,
+): ProposalBrandExtractionProvenance {
+  return {
+    kind: "website-brand-extraction",
+    role,
+    importedAt,
+    source: result.source,
+    sources: result.sources,
+    meta: result.meta,
+    palette: result.palette,
+    ...(result.manualOverrides === undefined ? {} : { manualOverrides: result.manualOverrides }),
+  } satisfies ProposalBrandExtractionProvenance;
+}
+
+function buildBrandProvenanceInput(
+  role: ProposalBrandRole,
+  provenance: ProposalBrandExtractionProvenance,
+): Partial<Record<ProposalBrandRole, ProposalBrandExtractionProvenance>> {
+  return role === "vendor" ? { vendor: provenance } : { client: provenance };
+}
+
+function applyImportedProjectBrand(
+  sourceOfTruth: ProposalProjectSourceOfTruth,
+  role: ProposalBrandRole,
+  brand: ProposalBrand,
+): ProposalProjectSourceOfTruth {
+  if (role === "vendor") {
+    return { ...sourceOfTruth, vendorBrand: brand } satisfies ProposalProjectSourceOfTruth;
+  }
+
+  return {
+    ...sourceOfTruth,
+    draft: applyClientBrandToDraft(sourceOfTruth.draft, brand),
+    clientBrand: brand,
+  } satisfies ProposalProjectSourceOfTruth;
+}
+
+function applyClientBrandToDraft(draft: ProposalDraft, brand: ProposalBrand): ProposalDraft {
+  return {
+    ...draft,
+    preparedFor: {
+      ...draft.preparedFor,
+      companyName: brand.name,
+      ...(brand.website === undefined ? {} : { website: brand.website }),
+      logoText: brand.logoText,
+      accentColor: brand.colors.accent,
+    },
+  } satisfies ProposalDraft;
+}
+
+function brandRoleLabel(role: ProposalBrandRole): string {
+  return role === "vendor" ? "Vendor" : "Client";
 }
 
 async function previewLatestProposalProjectResponse(
@@ -1154,7 +1424,11 @@ function parseProposalProjectRoute(pathname: string): ProposalProjectRoute | nul
   if (segments.length === 2) return { action: "state", projectId };
 
   const action = segments[2];
-  if (segments.length !== 3 || action === undefined) return null;
+  if (action === undefined) return null;
+  if (segments.length === 4 && action === "brands" && segments[3] === "import") {
+    return { action: "importBrand", projectId };
+  }
+  if (segments.length !== 3) return null;
   switch (action) {
     case "versions":
       return { action: "versions", projectId };
@@ -1231,6 +1505,7 @@ function healthResponse(agentSummary?: AgentConfigSummary): ApiRouteResponse {
       "proposalProject.updateWithBaseVersion",
       "proposalProject.previewLatest",
       "proposalProject.exportLatestPdf",
+      "proposalProject.importWebsiteBrand",
       "brand.listBuiltIns",
       "brand.validate",
       "brand.extractWebsite",

@@ -155,6 +155,9 @@ async function handleNodeRequest(
         await handleAgentMessages(request, response, bodyResult.value, {
           config: context.agentConfig,
           sessions: context.sessions,
+          ...(context.routes.proposalProjectStore === undefined
+            ? {}
+            : { proposalProjectStore: context.routes.proposalProjectStore }),
         });
         status = response.statusCode;
         return;

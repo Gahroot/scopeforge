@@ -58,6 +58,8 @@ export interface ValidationSnapshot {
 export interface SessionSnapshot {
   readonly sessionId: string;
   readonly author: ProposalAuthorMetadata;
+  readonly projectId?: string;
+  readonly projectVersionId?: string;
   readonly draft: DraftSnapshot;
   readonly economics: EconomicsSnapshot | null;
   readonly validation: ValidationSnapshot;
@@ -94,6 +96,7 @@ export type AgentStreamFrame =
 export interface AgentMessageRequest {
   readonly sessionId?: string;
   readonly message: string;
+  readonly projectId?: string;
   readonly brandId?: string;
   readonly audience?: ProposalAudience;
   /** Optional collaborator identity; string author/displayName values are accepted by the local API. */

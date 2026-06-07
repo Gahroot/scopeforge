@@ -1,9 +1,16 @@
 import type {
   ProposalBrand,
+  ProposalBrandColors,
   ProposalDraft,
   ProposalValidationError,
   ValidationResult,
 } from "../proposal/types.js";
+import type {
+  WebsiteBrandExtractionSources,
+  WebsiteBrandManualOverrides,
+  WebsiteBrandMeta,
+  WebsiteBrandSourceMetadata,
+} from "../brand/types.js";
 
 export const PROPOSAL_PROJECT_SCHEMA_VERSION = 1;
 
@@ -65,6 +72,19 @@ export interface ProposalProjectVersion {
   readonly hashes: ProposalProjectVersionHashes;
 }
 
+export interface ProposalWebsiteBrandExtractionProvenance {
+  readonly kind: "website-brand-extraction";
+  readonly role: ProposalBrandRole;
+  readonly importedAt: string;
+  readonly source: WebsiteBrandSourceMetadata;
+  readonly sources: WebsiteBrandExtractionSources;
+  readonly meta: WebsiteBrandMeta;
+  readonly palette: ProposalBrandColors;
+  readonly manualOverrides?: WebsiteBrandManualOverrides;
+}
+
+export type ProposalBrandExtractionProvenance = ProposalWebsiteBrandExtractionProvenance;
+
 export interface ProposalBrandSnapshot {
   readonly snapshotId: ProposalBrandSnapshotId;
   readonly role: ProposalBrandRole;
@@ -75,6 +95,7 @@ export interface ProposalBrandSnapshot {
   readonly sourceVersionId?: ProposalProjectVersionId;
   readonly label?: string;
   readonly source?: string;
+  readonly provenance?: ProposalBrandExtractionProvenance;
 }
 
 export type DisposableAgentThreadStatus = "open" | "closed" | "discarded";
@@ -162,6 +183,7 @@ export interface CommitProposalProjectVersionInput {
   readonly reason?: string;
   readonly source?: ProposalProjectVersionSource;
   readonly parentVersionId?: ProposalProjectVersionId;
+  readonly brandProvenance?: Partial<Record<ProposalBrandRole, ProposalBrandExtractionProvenance>>;
 }
 
 export interface CreateProposalBrandSnapshotInput {
@@ -173,6 +195,7 @@ export interface CreateProposalBrandSnapshotInput {
   readonly sourceVersionId?: ProposalProjectVersionId;
   readonly label?: string;
   readonly source?: string;
+  readonly provenance?: ProposalBrandExtractionProvenance;
 }
 
 export interface OpenDisposableAgentThreadInput {

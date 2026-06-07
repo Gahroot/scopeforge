@@ -1,12 +1,23 @@
 import { useState } from "react";
 import { Building2, Plus, Store } from "lucide-react";
-import { BrandImportDialog, type BrandRole } from "./BrandImportDialog.js";
+import {
+  BrandImportDialog,
+  type BrandImportProjectUpdate,
+  type BrandRole,
+} from "./BrandImportDialog.js";
 import type { ProposalBrand } from "../../proposal/types.js";
 
 export interface BrandBarProps {
   readonly vendorBrand: ProposalBrand | null;
   readonly clientBrand: ProposalBrand | null;
-  readonly onImported: (role: BrandRole, brand: ProposalBrand) => void;
+  readonly projectId: string | null;
+  readonly baseVersionId: string | null;
+  readonly displayName: string | null;
+  readonly onImported: (
+    role: BrandRole,
+    brand: ProposalBrand,
+    projectUpdate?: BrandImportProjectUpdate,
+  ) => void;
 }
 
 interface SlotProps {
@@ -37,7 +48,14 @@ function BrandSlot({ label, brand, icon, onOpen }: SlotProps): JSX.Element {
   );
 }
 
-export function BrandBar({ vendorBrand, clientBrand, onImported }: BrandBarProps): JSX.Element {
+export function BrandBar({
+  vendorBrand,
+  clientBrand,
+  projectId,
+  baseVersionId,
+  displayName,
+  onImported,
+}: BrandBarProps): JSX.Element {
   const [openRole, setOpenRole] = useState<BrandRole | null>(null);
 
   return (
@@ -60,6 +78,9 @@ export function BrandBar({ vendorBrand, clientBrand, onImported }: BrandBarProps
       {openRole !== null && (
         <BrandImportDialog
           role={openRole}
+          projectId={projectId}
+          baseVersionId={baseVersionId}
+          displayName={displayName}
           onImported={onImported}
           onClose={() => setOpenRole(null)}
         />

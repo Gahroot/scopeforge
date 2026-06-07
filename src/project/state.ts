@@ -21,6 +21,7 @@ import {
   type ProposalAuthorId,
   type ProposalAuthorKind,
   type ProposalAuthorMetadata,
+  type ProposalBrandExtractionProvenance,
   type ProposalBrandRole,
   type ProposalBrandSnapshot,
   type ProposalBrandSnapshotId,
@@ -41,6 +42,19 @@ const PROJECT_STATUSES = ["active", "archived"] as const satisfies readonly Prop
 const AUTHOR_KINDS = ["human", "agent", "system"] as const satisfies readonly ProposalAuthorKind[];
 
 const BRAND_ROLES = ["vendor", "client"] as const satisfies readonly ProposalBrandRole[];
+
+const BRAND_PROVENANCE_KINDS = ["website-brand-extraction"] as const;
+
+const BRAND_COLOR_KEYS = [
+  "primary",
+  "secondary",
+  "accent",
+  "background",
+  "surface",
+  "text",
+  "mutedText",
+  "border",
+] as const;
 
 const VERSION_SOURCES = [
   "human-edit",
@@ -218,7 +232,7 @@ export function commitProposalProjectVersion(
     versions: [...project.versions, version],
     brandSnapshots: [
       ...project.brandSnapshots,
-      ...createBrandSnapshotsForVersion(version, input.createdBy, createdAt),
+      ...createBrandSnapshotsForVersion(version, input.createdBy, createdAt, input.brandProvenance),
     ],
   } satisfies ProposalProject;
 }
@@ -239,6 +253,7 @@ export function createProposalBrandSnapshot(
     ...(input.sourceVersionId === undefined ? {} : { sourceVersionId: input.sourceVersionId }),
     ...(input.label === undefined ? {} : { label: input.label }),
     ...(input.source === undefined ? {} : { source: input.source }),
+    ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
   } satisfies ProposalBrandSnapshot;
 }
 
@@ -496,6 +511,7 @@ function createBrandSnapshotsForVersion(
   version: ProposalProjectVersion,
   capturedBy: ProposalAuthorMetadata,
   capturedAt: string,
+  provenance: Partial<Record<ProposalBrandRole, ProposalBrandExtractionProvenance>> = {},
 ): readonly ProposalBrandSnapshot[] {
   return [
     createProposalBrandSnapshot({
@@ -506,6 +522,7 @@ function createBrandSnapshotsForVersion(
       sourceVersionId: version.versionId,
       label: `Vendor brand for version ${version.versionNumber}`,
       source: "proposal-project-version",
+      ...(provenance.vendor === undefined ? {} : { provenance: provenance.vendor }),
     }),
     createProposalBrandSnapshot({
       role: "client",
@@ -515,6 +532,7 @@ function createBrandSnapshotsForVersion(
       sourceVersionId: version.versionId,
       label: `Client brand for version ${version.versionNumber}`,
       source: "proposal-project-version",
+      ...(provenance.client === undefined ? {} : { provenance: provenance.client }),
     }),
   ];
 }
@@ -741,6 +759,7 @@ function validateBrandSnapshots(
     validateOptionalString(item, "sourceVersionId", `${path}.sourceVersionId`, errors);
     validateOptionalString(item, "label", `${path}.label`, errors);
     validateOptionalString(item, "source", `${path}.source`, errors);
+    validateOptionalBrandProvenance(item.provenance, `${path}.provenance`, item.role, errors);
 
     if (typeof item.snapshotId === "string") {
       if (snapshotIds.has(item.snapshotId)) {
@@ -760,6 +779,133 @@ function validateBrandSnapshots(
       );
     }
   });
+}
+
+function validateOptionalBrandProvenance(
+  input: unknown,
+  path: string,
+  snapshotRole: unknown,
+  errors: ProposalProjectValidationError[],
+): void {
+  if (input === undefined) return;
+  if (!isRecord(input)) {
+    addError(errors, path, "Brand extraction provenance must be an object when provided.");
+    return;
+  }
+
+  validateEnum(input.kind, `${path}.kind`, BRAND_PROVENANCE_KINDS, "Brand provenance kind", errors);
+  validateEnum(input.role, `${path}.role`, BRAND_ROLES, "Brand provenance role", errors);
+  validateRequiredString(input, "importedAt", `${path}.importedAt`, errors);
+  if (
+    typeof input.role === "string" &&
+    typeof snapshotRole === "string" &&
+    input.role !== snapshotRole
+  ) {
+    addError(errors, `${path}.role`, "Brand provenance role must match the snapshot role.");
+  }
+
+  validateWebsiteBrandSourceMetadata(input.source, `${path}.source`, errors);
+  validateWebsiteBrandExtractionSources(input.sources, `${path}.sources`, errors);
+  validateRecord(input.meta, `${path}.meta`, "Brand provenance meta", errors);
+  validateBrandPalette(input.palette, `${path}.palette`, errors);
+  if (input.manualOverrides !== undefined) {
+    validateRecord(
+      input.manualOverrides,
+      `${path}.manualOverrides`,
+      "Brand provenance manualOverrides",
+      errors,
+    );
+  }
+}
+
+function validateWebsiteBrandSourceMetadata(
+  input: unknown,
+  path: string,
+  errors: ProposalProjectValidationError[],
+): void {
+  if (!validateRecord(input, path, "Website brand source metadata", errors)) return;
+  validateRequiredString(input, "requestedUrl", `${path}.requestedUrl`, errors);
+  validateRequiredString(input, "normalizedUrl", `${path}.normalizedUrl`, errors);
+  validateRequiredString(input, "finalUrl", `${path}.finalUrl`, errors);
+  validateRequiredString(input, "fetchedAt", `${path}.fetchedAt`, errors);
+  validateNumber(input.statusCode, `${path}.statusCode`, errors, {
+    integer: true,
+    minInclusive: 100,
+    maxInclusive: 599,
+    label: "Status code",
+  });
+  validateNumber(input.bytesRead, `${path}.bytesRead`, errors, {
+    integer: true,
+    minInclusive: 0,
+    label: "Bytes read",
+  });
+  validateNumber(input.elapsedMs, `${path}.elapsedMs`, errors, {
+    minInclusive: 0,
+    label: "Elapsed milliseconds",
+  });
+  validateRequiredString(input, "extractor", `${path}.extractor`, errors);
+  validateNumber(input.extractorVersion, `${path}.extractorVersion`, errors, {
+    integer: true,
+    minInclusive: 1,
+    label: "Extractor version",
+  });
+  validateOptionalString(input, "contentType", `${path}.contentType`, errors);
+  validateArray(input.redirects, `${path}.redirects`, "Redirects", errors);
+  validateStringArray(input.warnings, `${path}.warnings`, errors);
+}
+
+function validateWebsiteBrandExtractionSources(
+  input: unknown,
+  path: string,
+  errors: ProposalProjectValidationError[],
+): void {
+  if (!validateRecord(input, path, "Website brand extraction sources", errors)) return;
+  validateRecord(input.name, `${path}.name`, "Name source", errors);
+  validateOptionalRecord(input.tagline, `${path}.tagline`, "Tagline source", errors);
+  validateOptionalRecord(input.logoUrl, `${path}.logoUrl`, "Logo URL source", errors);
+  validateRecord(input.colors, `${path}.colors`, "Color sources", errors);
+}
+
+function validateBrandPalette(
+  input: unknown,
+  path: string,
+  errors: ProposalProjectValidationError[],
+): void {
+  if (!validateRecord(input, path, "Brand provenance palette", errors)) return;
+  for (const key of BRAND_COLOR_KEYS) {
+    validateRequiredString(input, key, `${path}.${key}`, errors);
+  }
+}
+
+function validateRecord(
+  input: unknown,
+  path: string,
+  label: string,
+  errors: ProposalProjectValidationError[],
+): input is Readonly<Record<string, unknown>> {
+  if (isRecord(input)) return true;
+  addError(errors, path, `${label} must be an object.`);
+  return false;
+}
+
+function validateOptionalRecord(
+  input: unknown,
+  path: string,
+  label: string,
+  errors: ProposalProjectValidationError[],
+): void {
+  if (input === undefined) return;
+  validateRecord(input, path, label, errors);
+}
+
+function validateArray(
+  input: unknown,
+  path: string,
+  label: string,
+  errors: ProposalProjectValidationError[],
+): void {
+  if (Array.isArray(input)) return;
+  addError(errors, path, `${label} must be an array.`);
 }
 
 function validateArtifacts(

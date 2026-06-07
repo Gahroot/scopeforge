@@ -1,3 +1,8 @@
+import type {
+  ProposalProject,
+  ProposalProjectSourceOfTruth,
+  ProposalProjectVersion,
+} from "../../project/types.js";
 import type { ProposalAudience, ProposalBrand, ProposalDraft } from "../../proposal/types.js";
 
 export interface HealthAgentSummary {
@@ -82,6 +87,8 @@ export async function fetchBrands(signal?: AbortSignal): Promise<ApiResult<Brand
 export interface BrandExtractResponse {
   readonly ok: boolean;
   readonly brand: ProposalBrand;
+  readonly source?: unknown;
+  readonly sources?: unknown;
   readonly name?: string;
   readonly tagline?: string;
   readonly logoUrl?: string;
@@ -92,6 +99,74 @@ export async function extractBrand(
   signal?: AbortSignal,
 ): Promise<ApiResult<BrandExtractResponse>> {
   return postJson<BrandExtractResponse>("/api/brand/extract", { url }, signal);
+}
+
+export interface ProposalProjectListItemResponse {
+  readonly projectId: string;
+  readonly title: string;
+  readonly status: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly currentVersionId: string;
+  readonly versionCount: number;
+}
+
+export interface ProposalProjectsResponse {
+  readonly ok: boolean;
+  readonly projects: readonly ProposalProjectListItemResponse[];
+}
+
+export interface ProposalProjectStateResponse {
+  readonly ok: boolean;
+  readonly project: ProposalProject;
+  readonly currentVersion: ProposalProjectVersion;
+  readonly sourceOfTruth: ProposalProjectSourceOfTruth;
+}
+
+export interface ProjectBrandImportResponse extends BrandExtractResponse {
+  readonly role: "vendor" | "client";
+  readonly provenance: unknown;
+  readonly project: ProposalProject;
+  readonly currentVersion: ProposalProjectVersion;
+  readonly sourceOfTruth: ProposalProjectSourceOfTruth;
+}
+
+export async function fetchProposalProjects(
+  signal?: AbortSignal,
+): Promise<ApiResult<ProposalProjectsResponse>> {
+  const response = await fetch("/api/proposal-projects", signal === undefined ? {} : { signal });
+  return readJson<ProposalProjectsResponse>(response);
+}
+
+export async function fetchProposalProjectState(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<ProposalProjectStateResponse>> {
+  const response = await fetch(
+    `/api/proposal-projects/${encodeURIComponent(projectId)}`,
+    signal === undefined ? {} : { signal },
+  );
+  return readJson<ProposalProjectStateResponse>(response);
+}
+
+export async function importProjectBrand(
+  projectId: string,
+  baseVersionId: string,
+  role: "vendor" | "client",
+  url: string,
+  displayName: string | null,
+  signal?: AbortSignal,
+): Promise<ApiResult<ProjectBrandImportResponse>> {
+  return postJson<ProjectBrandImportResponse>(
+    `/api/proposal-projects/${encodeURIComponent(projectId)}/brands/import`,
+    {
+      role,
+      url,
+      baseVersionId,
+      ...(displayName === null ? {} : { displayName }),
+    },
+    signal,
+  );
 }
 
 async function postJson<T>(
