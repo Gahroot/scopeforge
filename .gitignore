@@ -9,6 +9,9 @@ dist/
 coverage/
 out/
 
+# local server-side project store
+.scopeforge/
+
 .ezcoder/
 
 # stray secret scratch file (contains API key)
