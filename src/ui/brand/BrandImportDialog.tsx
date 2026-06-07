@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2, X } from "lucide-react";
 import { Button } from "../components/ui/button.js";
 import { Input } from "../components/ui/input.js";
-import { extractBrand, importProjectBrand } from "../lib/api.js";
+import { importProjectBrand } from "../lib/api.js";
 import type {
   ProposalProject,
   ProposalProjectSourceOfTruth,
@@ -73,20 +73,13 @@ export function BrandImportDialog({
       setError("Enter a website URL.");
       return;
     }
-    setBusy(true);
-    setError(null);
     if (projectId === null || baseVersionId === null) {
-      const result = await extractBrand(trimmed);
-      setBusy(false);
-      if (!result.ok) {
-        setError(result.error.message);
-        return;
-      }
-      onImported(role, result.value.brand);
-      onClose();
+      setError("Select a proposal project before importing a website brand.");
       return;
     }
 
+    setBusy(true);
+    setError(null);
     const result = await importProjectBrand(projectId, baseVersionId, role, trimmed, displayName);
     setBusy(false);
     if (!result.ok) {
