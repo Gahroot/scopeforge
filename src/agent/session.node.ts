@@ -3,12 +3,24 @@ import type { Message } from "@kenkaiiii/gg-ai";
 import { analyzeProject } from "../core/index.js";
 import { createDefaultProject } from "../data/defaults.js";
 import { resolveBrand } from "../proposal/brands.js";
-import { createProposalDraftStore, proposalIntakeToDraft } from "../proposal/draftStore.js";
+import {
+  createProposalDraftStore,
+  proposalIntakeToDraft,
+  updateDraftPreparedFor,
+} from "../proposal/draftStore.js";
 import { formatMoney, formatMoneyRange, formatMonths } from "../proposal/format.js";
 import { leadPrice } from "../core/pricing.js";
 import { getClientBlockingWarnings } from "../proposal/model.js";
 import { proposalDraftToIntake, validateProposalDraft } from "../proposal/schema.js";
-import type { ProposalAudience, ProposalDraft, ProposalIntake } from "../proposal/types.js";
+import { createProposalAuthorMetadata } from "../project/state.js";
+import type { ProposalAuthorMetadata } from "../project/types.js";
+import type {
+  ProposalAudience,
+  ProposalBrand,
+  ProposalDraft,
+  ProposalIntake,
+} from "../proposal/types.js";
+import type { PreparedForPatch } from "../proposal/draftStore.js";
 import type { ProposalDraftStoreState } from "../proposal/draftStore.js";
 import type {
   DraftSnapshot,
@@ -19,18 +31,30 @@ import type {
 
 const DEFAULT_BRAND_ID = "nolan";
 
+export const DEFAULT_SESSION_AUTHOR = createProposalAuthorMetadata({
+  authorId: "local-collaborator",
+  displayName: "Local collaborator",
+  kind: "human",
+});
+
 export interface AgentSession {
   readonly id: string;
   store: ProposalDraftStoreState;
   messages: Message[];
   brandId: string;
   audience: ProposalAudience;
+  createdBy: ProposalAuthorMetadata;
+  /** Imported vendor brand ("My brand"); null until imported. */
+  vendorBrand: ProposalBrand | null;
+  /** Imported client brand ("Prepared for"); null until imported. */
+  clientBrand: ProposalBrand | null;
   abort: AbortController | null;
 }
 
 export interface SessionCreateOptions {
   readonly brandId?: string;
   readonly audience?: ProposalAudience;
+  readonly author?: ProposalAuthorMetadata;
 }
 
 export interface SessionStore {
@@ -55,6 +79,9 @@ export function createSessionStore(dependencies: SessionStoreDependencies = {}):
       messages: [],
       brandId: options.brandId ?? DEFAULT_BRAND_ID,
       audience: options.audience ?? "client",
+      createdBy: options.author ?? DEFAULT_SESSION_AUTHOR,
+      vendorBrand: null,
+      clientBrand: null,
       abort: null,
     };
     sessions.set(id, session);
@@ -106,6 +133,7 @@ export function buildSessionSnapshot(session: AgentSession): SessionSnapshot {
   const economics = buildEconomicsSnapshot(draft);
   return {
     sessionId: session.id,
+    author: session.createdBy,
     draft: buildDraftSnapshot(session, draft),
     economics,
     validation,
@@ -181,4 +209,27 @@ function buildValidationSnapshot(
 
 export function resolveSessionBrandId(brandId: string): string {
   return resolveBrand(brandId) === null ? DEFAULT_BRAND_ID : brandId;
+}
+
+/**
+ * Resolve the brand the proposal should render with: the imported vendor brand
+ * when present, otherwise the built-in resolved from `brandId`.
+ */
+export function resolveSessionVendorBrand(session: AgentSession): ProposalBrand | null {
+  return session.vendorBrand ?? resolveBrand(session.brandId);
+}
+
+/**
+ * Seed the draft's `preparedFor` from an imported client brand and remember it on
+ * the session. Idempotent: re-applying the same brand reproduces the same patch.
+ */
+export function applyClientBrandToSession(session: AgentSession, brand: ProposalBrand): void {
+  const patch: PreparedForPatch = {
+    companyName: brand.name,
+    ...(brand.website === undefined ? {} : { website: brand.website }),
+    logoText: brand.logoText,
+    accentColor: brand.colors.accent,
+  };
+  session.store = updateDraftPreparedFor(session.store, patch, { label: "Seed client brand" });
+  session.clientBrand = brand;
 }

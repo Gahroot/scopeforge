@@ -239,6 +239,7 @@ describe("proposal project helpers", () => {
     });
 
     expect(opened.agentThreads[0]?.status).toBe("open");
+    expect(opened.agentThreads[0]?.createdBy).toEqual(AGENT_AUTHOR);
     expect(withArtifact.agentThreads[0]?.artifactIds).toEqual([
       toProposalArtifactId("artifact-preview-html"),
     ]);

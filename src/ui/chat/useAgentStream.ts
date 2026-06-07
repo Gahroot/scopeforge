@@ -27,7 +27,13 @@ export interface AgentStreamApi {
   readonly status: AgentStatus;
   readonly snapshot: SessionSnapshot | null;
   readonly error: string | null;
-  send(message: string, options?: Pick<AgentMessageRequest, "brandId" | "audience">): Promise<void>;
+  send(
+    message: string,
+    options?: Pick<
+      AgentMessageRequest,
+      "brandId" | "audience" | "author" | "displayName" | "vendorBrand" | "clientBrand"
+    >,
+  ): Promise<void>;
   stop(): void;
 }
 
@@ -57,7 +63,10 @@ export function useAgentStream(): AgentStreamApi {
   const send = useCallback(
     async (
       text: string,
-      options?: Pick<AgentMessageRequest, "brandId" | "audience">,
+      options?: Pick<
+        AgentMessageRequest,
+        "brandId" | "audience" | "author" | "displayName" | "vendorBrand" | "clientBrand"
+      >,
     ): Promise<void> => {
       if (status !== "idle") return;
       setError(null);
@@ -76,6 +85,10 @@ export function useAgentStream(): AgentStreamApi {
         ...(sessionIdRef.current === null ? {} : { sessionId: sessionIdRef.current }),
         ...(options?.brandId === undefined ? {} : { brandId: options.brandId }),
         ...(options?.audience === undefined ? {} : { audience: options.audience }),
+        ...(options?.author === undefined ? {} : { author: options.author }),
+        ...(options?.displayName === undefined ? {} : { displayName: options.displayName }),
+        ...(options?.vendorBrand === undefined ? {} : { vendorBrand: options.vendorBrand }),
+        ...(options?.clientBrand === undefined ? {} : { clientBrand: options.clientBrand }),
       };
 
       try {

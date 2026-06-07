@@ -515,6 +515,96 @@ describe("server API routes", () => {
     });
   });
 
+  it("records collaborator authors on project versions and falls back to a local label", async () => {
+    await withProjectRouteStore(async (store) => {
+      const createResponse = await handleApiRoute(
+        {
+          method: "POST",
+          pathname: "/api/proposal-projects",
+          body: {
+            draft: projectRouteDraft("Authored Operations AI Pilot", 1),
+            brand: BUILT_IN_BRANDS.nolan,
+            clientBrand: BUILT_IN_BRANDS.partners,
+            displayName: " Riley Chen ",
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const createdBody = expectJson(createResponse).body;
+      const createdProject = readRecordField(createdBody, "project");
+      const createdVersion = readRecordField(createdBody, "currentVersion");
+      const createdBy = readRecordField(createdProject, "createdBy");
+      const versionCreatedBy = readRecordField(createdVersion, "createdBy");
+      const projectId = readStringField(createdProject, "projectId");
+      const initialVersionId = readStringField(createdProject, "currentVersionId");
+
+      expect(readStringField(createdBy, "displayName")).toBe("Riley Chen");
+      expect(readStringField(createdBy, "kind")).toBe("human");
+      expect(versionCreatedBy).toEqual(createdBy);
+
+      const listResponse = await handleApiRoute(
+        { method: "GET", pathname: "/api/proposal-projects" },
+        { proposalProjectStore: store },
+      );
+      const listAuthor = readRecordField(
+        readArrayField(expectJson(listResponse).body, "projects")[0],
+        "createdBy",
+      );
+      expect(readStringField(listAuthor, "displayName")).toBe("Riley Chen");
+
+      const updateResponse = await handleApiRoute(
+        {
+          method: "PATCH",
+          pathname: `/api/proposal-projects/${projectId}`,
+          body: {
+            baseVersionId: initialVersionId,
+            draft: projectRouteDraft("Ari's Operations AI Pilot", 2),
+            author: "Ari Patel",
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const updatedBody = expectJson(updateResponse).body;
+      const updatedProject = readRecordField(updatedBody, "project");
+      const updatedVersion = readRecordField(updatedBody, "currentVersion");
+      const updatedBy = readRecordField(updatedProject, "updatedBy");
+      const updatedVersionAuthor = readRecordField(updatedVersion, "createdBy");
+
+      expect(readStringField(updatedBy, "displayName")).toBe("Ari Patel");
+      expect(readStringField(updatedVersionAuthor, "displayName")).toBe("Ari Patel");
+
+      const historyResponse = await handleApiRoute(
+        { method: "GET", pathname: `/api/proposal-projects/${projectId}/versions` },
+        { proposalProjectStore: store },
+      );
+      const versions = readArrayField(expectJson(historyResponse).body, "versions");
+      expect(readStringField(readRecordField(versions[0], "createdBy"), "displayName")).toBe(
+        "Riley Chen",
+      );
+      expect(readStringField(readRecordField(versions[1], "createdBy"), "displayName")).toBe(
+        "Ari Patel",
+      );
+
+      const fallbackResponse = await handleApiRoute(
+        {
+          method: "POST",
+          pathname: "/api/proposal-projects",
+          body: {
+            draft: projectRouteDraft("Fallback Author Operations AI Pilot", 1),
+            brand: BUILT_IN_BRANDS.nolan,
+            clientBrand: BUILT_IN_BRANDS.partners,
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const fallbackProject = readRecordField(expectJson(fallbackResponse).body, "project");
+      const fallbackAuthor = readRecordField(fallbackProject, "createdBy");
+
+      expect(readStringField(fallbackAuthor, "displayName")).toBe("Local collaborator");
+      expect(readStringField(fallbackAuthor, "kind")).toBe("human");
+    });
+  });
+
   it("returns typed JSON errors for missing projects and stale base versions", async () => {
     await withProjectRouteStore(async (store) => {
       const missingResponse = await handleApiRoute(

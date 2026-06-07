@@ -1,25 +1,33 @@
 import { useState } from "react";
 import { Download, Eye, Loader2 } from "lucide-react";
 import { Button } from "../components/ui/button.js";
-import { exportProposalPdf, previewProposal } from "../lib/api.js";
+import { exportProposalPdf, previewProposal, type ProposalRequestBody } from "../lib/api.js";
 import type { SessionSnapshot } from "../lib/types.js";
+import type { ProposalBrand } from "../../proposal/types.js";
 
 export interface PreviewExportBarProps {
   readonly snapshot: SessionSnapshot;
   readonly disabled: boolean;
+  readonly vendorBrand?: ProposalBrand | null;
 }
 
 type Action = "preview" | "export" | null;
 
-export function PreviewExportBar({ snapshot, disabled }: PreviewExportBarProps): JSX.Element {
+export function PreviewExportBar({
+  snapshot,
+  disabled,
+  vendorBrand,
+}: PreviewExportBarProps): JSX.Element {
   const [action, setAction] = useState<Action>(null);
   const [error, setError] = useState<string | null>(null);
   const blocked = !snapshot.validation.ok || snapshot.validation.blocking.length > 0;
 
-  const body = {
+  const body: ProposalRequestBody = {
     draft: snapshot.fullDraft,
-    brandId: snapshot.draft.brandId,
     audience: snapshot.draft.audience,
+    ...(vendorBrand === undefined || vendorBrand === null
+      ? { brandId: snapshot.draft.brandId }
+      : { brand: vendorBrand }),
   };
 
   async function handlePreview(): Promise<void> {

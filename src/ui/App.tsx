@@ -1,17 +1,29 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Sparkles } from "lucide-react";
+import { Input } from "./components/ui/input.js";
 import { TooltipProvider } from "./components/ui/tooltip.js";
 import { ChatPanel } from "./chat/ChatPanel.js";
 import { DraftPanel } from "./draft/DraftPanel.js";
+import { BrandBar } from "./brand/BrandBar.js";
 import { useAgentStream } from "./chat/useAgentStream.js";
 import { fetchBrands, fetchHealth, type HealthResponse } from "./lib/api.js";
+import type { BrandRole } from "./brand/BrandImportDialog.js";
 import type { ProposalBrand } from "../proposal/types.js";
 
 export function App(): JSX.Element {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [agentEnabled, setAgentEnabled] = useState(true);
   const [brands, setBrands] = useState<readonly ProposalBrand[]>([]);
+  const [vendorBrand, setVendorBrand] = useState<ProposalBrand | null>(null);
+  const [clientBrand, setClientBrand] = useState<ProposalBrand | null>(null);
+  const [displayName, setDisplayName] = useState("");
   const agent = useAgentStream();
+  const collaboratorDisplayName = displayName.trim();
+
+  const handleImported = useCallback((role: BrandRole, brand: ProposalBrand): void => {
+    if (role === "vendor") setVendorBrand(brand);
+    else setClientBrand(brand);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -42,16 +54,47 @@ export function App(): JSX.Element {
               <div className="text-xs text-muted-foreground">Proposal Copilot</div>
             </div>
           </div>
-          <div className="text-xs text-muted-foreground">
-            {health === null
-              ? "Connecting…"
-              : `API v${health.apiVersion}${agentEnabled ? "" : " · agent offline"}`}
+          <div className="flex items-center gap-4">
+            <label
+              className="hidden items-center gap-2 text-xs text-muted-foreground md:flex"
+              htmlFor="scopeforge-collaborator-display-name"
+            >
+              Collaborator
+              <Input
+                id="scopeforge-collaborator-display-name"
+                className="h-8 w-40"
+                placeholder="Local collaborator"
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+              />
+            </label>
+            <BrandBar
+              vendorBrand={vendorBrand}
+              clientBrand={clientBrand}
+              onImported={handleImported}
+            />
+            <div className="text-xs text-muted-foreground">
+              {health === null
+                ? "Connecting…"
+                : `API v${health.apiVersion}${agentEnabled ? "" : " · agent offline"}`}
+            </div>
           </div>
         </header>
 
         <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)]">
-          <ChatPanel agent={agent} agentEnabled={agentEnabled} />
-          <DraftPanel snapshot={agent.snapshot} brands={brands} busy={agent.status !== "idle"} />
+          <ChatPanel
+            agent={agent}
+            agentEnabled={agentEnabled}
+            displayName={collaboratorDisplayName.length === 0 ? null : collaboratorDisplayName}
+            vendorBrand={vendorBrand}
+            clientBrand={clientBrand}
+          />
+          <DraftPanel
+            snapshot={agent.snapshot}
+            brands={brands}
+            busy={agent.status !== "idle"}
+            vendorBrand={vendorBrand}
+          />
         </main>
       </div>
     </TooltipProvider>

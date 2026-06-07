@@ -3,11 +3,14 @@ import type { EnabledAgentConfig } from "../agent/config.node.js";
 import { logError, logWarn } from "../diagnostics/logger.node.js";
 import { errorFrame, runProposalAgentStream } from "../agent/proposalAgentService.node.js";
 import {
+  DEFAULT_SESSION_AUTHOR,
   applyClientBrandToSession,
   resolveSessionBrandId,
   type AgentSession,
   type SessionStore,
 } from "../agent/session.node.js";
+import { createProposalAuthorMetadata } from "../project/state.js";
+import type { ProposalAuthorKind, ProposalAuthorMetadata } from "../project/types.js";
 import { validateProposalBrand } from "../proposal/brands.js";
 import type { AgentStreamFrame } from "../ui/lib/types.js";
 import type { ProposalAudience, ProposalBrand } from "../proposal/types.js";
@@ -32,6 +35,7 @@ interface AgentMessageInput {
   readonly message: string;
   readonly brandId?: string;
   readonly audience?: ProposalAudience;
+  readonly author?: ProposalAuthorMetadata;
   readonly vendorBrand?: ProposalBrand;
   readonly clientBrand?: ProposalBrand;
 }
@@ -51,6 +55,16 @@ function parseOptionalBrand(value: unknown, role: "vendor" | "client"): Proposal
   return undefined;
 }
 
+const AGENT_AUTHOR_KINDS = [
+  "human",
+  "agent",
+  "system",
+] as const satisfies readonly ProposalAuthorKind[];
+
+type AgentAuthorParseResult =
+  | { readonly ok: true; readonly value?: ProposalAuthorMetadata }
+  | { readonly ok: false; readonly message: string };
+
 type ParseResult =
   | { readonly ok: true; readonly value: AgentMessageInput }
   | { readonly ok: false; readonly message: string };
@@ -66,6 +80,8 @@ export function parseAgentMessageBody(body: unknown): ParseResult {
   }
   const audience =
     record.audience === "internal" || record.audience === "client" ? record.audience : undefined;
+  const author = parseOptionalAgentAuthor(record);
+  if (!author.ok) return { ok: false, message: author.message };
   const vendorBrand = parseOptionalBrand(record.vendorBrand, "vendor");
   const clientBrand = parseOptionalBrand(record.clientBrand, "client");
   return {
@@ -75,10 +91,116 @@ export function parseAgentMessageBody(body: unknown): ParseResult {
       ...(typeof record.sessionId === "string" ? { sessionId: record.sessionId } : {}),
       ...(typeof record.brandId === "string" ? { brandId: record.brandId } : {}),
       ...(audience === undefined ? {} : { audience }),
+      ...(author.value === undefined ? {} : { author: author.value }),
       ...(vendorBrand === undefined ? {} : { vendorBrand }),
       ...(clientBrand === undefined ? {} : { clientBrand }),
     },
   };
+}
+
+function parseOptionalAgentAuthor(
+  record: Readonly<Record<string, unknown>>,
+): AgentAuthorParseResult {
+  const rawAuthor =
+    record.createdBy ??
+    record.updatedBy ??
+    record.author ??
+    record.displayName ??
+    record.authorDisplayName;
+  if (rawAuthor === undefined || rawAuthor === null) return { ok: true };
+
+  if (typeof rawAuthor === "string") {
+    const displayName = rawAuthor.trim();
+    if (displayName.length === 0) {
+      return {
+        ok: false,
+        message: "author/displayName must be a non-empty string when provided.",
+      };
+    }
+    return {
+      ok: true,
+      value: createProposalAuthorMetadata({
+        authorId: slugifyAuthorId(displayName),
+        displayName,
+        kind: "human",
+      }),
+    };
+  }
+
+  if (!isRecord(rawAuthor)) {
+    return { ok: false, message: "author must be a display name or author metadata." };
+  }
+
+  const errors: string[] = [];
+  const authorId = readRequiredAgentAuthorString(rawAuthor, "authorId", errors);
+  const displayName = readRequiredAgentAuthorString(rawAuthor, "displayName", errors);
+  const kind = readRequiredAgentAuthorKind(rawAuthor.kind, errors);
+  const email = readOptionalAgentAuthorString(rawAuthor, "email", errors);
+  const organization = readOptionalAgentAuthorString(rawAuthor, "organization", errors);
+
+  if (errors.length > 0 || authorId === null || displayName === null || kind === null) {
+    return { ok: false, message: `Author metadata is invalid: ${errors.join("; ")}` };
+  }
+
+  return {
+    ok: true,
+    value: createProposalAuthorMetadata({
+      authorId,
+      displayName,
+      kind,
+      ...(email === undefined ? {} : { email }),
+      ...(organization === undefined ? {} : { organization }),
+    }),
+  };
+}
+
+function readRequiredAgentAuthorString(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+  errors: string[],
+): string | null {
+  const value = input[key];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    errors.push(`${key} must be a non-empty string`);
+    return null;
+  }
+  return value.trim();
+}
+
+function readOptionalAgentAuthorString(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+  errors: string[],
+): string | undefined {
+  const value = input[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    errors.push(`${key} must be a non-empty string when provided`);
+    return undefined;
+  }
+  return value.trim();
+}
+
+function readRequiredAgentAuthorKind(input: unknown, errors: string[]): ProposalAuthorKind | null {
+  if (isAgentAuthorKind(input)) return input;
+  errors.push(`kind must be one of: ${AGENT_AUTHOR_KINDS.join(", ")}`);
+  return null;
+}
+
+function isAgentAuthorKind(input: unknown): input is ProposalAuthorKind {
+  return typeof input === "string" && AGENT_AUTHOR_KINDS.some((kind) => kind === input);
+}
+
+function slugifyAuthorId(input: string): string {
+  const slug = input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug.length === 0 ? "local-collaborator" : slug;
+}
+
+function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
 export interface AgentStreamHandlerOptions {
@@ -110,11 +232,13 @@ export async function handleAgentMessages(
       ? {}
       : { brandId: resolveSessionBrandId(parsed.value.brandId) }),
     ...(parsed.value.audience === undefined ? {} : { audience: parsed.value.audience }),
+    ...(parsed.value.author === undefined ? {} : { author: parsed.value.author }),
   });
   if (parsed.value.brandId !== undefined) {
     session.brandId = resolveSessionBrandId(parsed.value.brandId);
   }
   if (parsed.value.audience !== undefined) session.audience = parsed.value.audience;
+  if (parsed.value.author !== undefined) session.createdBy = parsed.value.author;
   if (parsed.value.vendorBrand !== undefined) session.vendorBrand = parsed.value.vendorBrand;
   if (
     parsed.value.clientBrand !== undefined &&
@@ -135,7 +259,11 @@ export async function handleAgentMessages(
     "X-Accent-Buffering": "no",
   });
 
-  write(response, { type: "session", sessionId: session.id });
+  write(response, {
+    type: "session",
+    sessionId: session.id,
+    author: session.createdBy ?? DEFAULT_SESSION_AUTHOR,
+  });
 
   const contextNote = buildContextNote(session);
   try {

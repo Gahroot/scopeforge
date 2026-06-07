@@ -62,6 +62,7 @@ describe("local proposal project store", () => {
           status: "active",
           createdAt: INITIAL_TIME,
           updatedAt: INITIAL_TIME,
+          createdBy: HUMAN_AUTHOR,
           currentVersionId: currentVersion.versionId,
           versionCount: 1,
         },

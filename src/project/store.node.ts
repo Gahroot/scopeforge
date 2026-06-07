@@ -48,6 +48,8 @@ export interface ProposalProjectListItem {
   readonly status: ProposalProject["status"];
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly createdBy: ProposalProject["createdBy"];
+  readonly updatedBy?: ProposalProject["updatedBy"];
   readonly currentVersionId: ProposalProjectVersionId;
   readonly versionCount: number;
 }
@@ -224,6 +226,8 @@ function projectListItem(project: ProposalProject): ProposalProjectListItem {
     status: project.status,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
+    createdBy: project.createdBy,
+    ...(project.updatedBy === undefined ? {} : { updatedBy: project.updatedBy }),
     currentVersionId: project.currentVersionId,
     versionCount: project.versions.length,
   } satisfies ProposalProjectListItem;

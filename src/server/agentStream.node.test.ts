@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent, AgentResult } from "@kenkaiiii/gg-agent";
+import { BUILT_IN_BRANDS } from "../proposal/brands.js";
 import { createSessionStore, type AgentSession } from "../agent/session.node.js";
 import type { AgentStreamFrame } from "../ui/lib/types.js";
 import {
@@ -68,7 +69,11 @@ describe("eventToFrames", () => {
       { type: "tool_call_start", toolCallId: "t1", name: "run_analysis", args: {} },
       names,
     );
-    expect(start[0]).toMatchObject({ type: "tool_start", name: "run_analysis", label: "Running analysis" });
+    expect(start[0]).toMatchObject({
+      type: "tool_start",
+      name: "run_analysis",
+      label: "Running analysis",
+    });
 
     const end = eventToFrames(
       { type: "tool_call_end", toolCallId: "t1", result: "done", isError: false, durationMs: 5 },
@@ -79,7 +84,17 @@ describe("eventToFrames", () => {
 
   it("ignores unmapped events", () => {
     const names = new Map<string, string>();
-    expect(eventToFrames({ type: "turn_end", turn: 1, stopReason: "end_turn", usage: {} as AgentResult["totalUsage"] }, names)).toEqual([]);
+    expect(
+      eventToFrames(
+        {
+          type: "turn_end",
+          turn: 1,
+          stopReason: "end_turn",
+          usage: {} as AgentResult["totalUsage"],
+        },
+        names,
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -90,7 +105,13 @@ describe("translateAgentStream", () => {
       [
         { type: "text_delta", text: "Hello" },
         { type: "tool_call_start", toolCallId: "t1", name: "get_draft_summary", args: {} },
-        { type: "tool_call_end", toolCallId: "t1", result: "summary", isError: false, durationMs: 1 },
+        {
+          type: "tool_call_end",
+          toolCallId: "t1",
+          result: "summary",
+          isError: false,
+          durationMs: 1,
+        },
       ],
       doneResult,
     );
@@ -141,6 +162,43 @@ describe("parseAgentMessageBody", () => {
       ok: true,
       value: { message: "draft this", sessionId: "s1", brandId: "nolan", audience: "internal" },
     });
+  });
+
+  it("accepts a lightweight collaborator display name", () => {
+    const parsed = parseAgentMessageBody({
+      message: "draft this",
+      displayName: " Riley Chen ",
+    });
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.author).toEqual({
+      authorId: "riley-chen",
+      displayName: "Riley Chen",
+      kind: "human",
+    });
+  });
+
+  it("validates and passes through imported vendor and client brands", () => {
+    const parsed = parseAgentMessageBody({
+      message: "hello",
+      vendorBrand: BUILT_IN_BRANDS.nolan,
+      clientBrand: BUILT_IN_BRANDS.partners,
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.vendorBrand).toEqual(BUILT_IN_BRANDS.nolan);
+    expect(parsed.value.clientBrand).toEqual(BUILT_IN_BRANDS.partners);
+  });
+
+  it("drops an invalid imported brand without failing the message", () => {
+    const parsed = parseAgentMessageBody({
+      message: "hello",
+      vendorBrand: { id: "x", name: "", colors: {} },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.vendorBrand).toBeUndefined();
   });
 });
 

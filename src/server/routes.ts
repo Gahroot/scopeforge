@@ -84,9 +84,9 @@ const PROPOSAL_AUTHOR_KINDS = [
   "system",
 ] as const satisfies readonly ProposalAuthorKind[];
 const DEFAULT_PROJECT_AUTHOR = createProposalAuthorMetadata({
-  authorId: "local-api",
-  displayName: "ScopeForge Local API",
-  kind: "system",
+  authorId: "local-collaborator",
+  displayName: "Local collaborator",
+  kind: "human",
 });
 const PROPOSAL_BRAND_COLOR_KEYS = [
   "primary",
@@ -917,8 +917,12 @@ function resolveProposalProjectAuthor(
   const rawAuthor =
     readOptionalUnknown(input, "createdBy") ??
     readOptionalUnknown(input, "updatedBy") ??
-    readOptionalUnknown(input, "author");
-  if (rawAuthor === undefined) return { ok: true, value: DEFAULT_PROJECT_AUTHOR };
+    readOptionalUnknown(input, "author") ??
+    readOptionalUnknown(input, "displayName") ??
+    readOptionalUnknown(input, "authorDisplayName");
+  if (rawAuthor === undefined || rawAuthor === null) {
+    return { ok: true, value: DEFAULT_PROJECT_AUTHOR };
+  }
 
   if (typeof rawAuthor === "string") {
     const displayName = rawAuthor.trim();

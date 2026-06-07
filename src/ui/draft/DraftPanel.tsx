@@ -12,6 +12,7 @@ export interface DraftPanelProps {
   readonly snapshot: SessionSnapshot | null;
   readonly brands: readonly ProposalBrand[];
   readonly busy: boolean;
+  readonly vendorBrand: ProposalBrand | null;
 }
 
 function formatMoney(value: number | null): string {
@@ -23,7 +24,7 @@ function formatMoney(value: number | null): string {
   }).format(Math.round(value));
 }
 
-export function DraftPanel({ snapshot, brands, busy }: DraftPanelProps): JSX.Element {
+export function DraftPanel({ snapshot, brands, busy, vendorBrand }: DraftPanelProps): JSX.Element {
   if (snapshot === null) {
     return (
       <aside className="hidden min-h-0 flex-col bg-muted/30 lg:flex">
@@ -37,7 +38,7 @@ export function DraftPanel({ snapshot, brands, busy }: DraftPanelProps): JSX.Ele
   }
 
   const { draft, economics, validation } = snapshot;
-  const brand = brands.find((candidate) => candidate.id === draft.brandId);
+  const brand = vendorBrand ?? brands.find((candidate) => candidate.id === draft.brandId);
 
   return (
     <aside className="hidden min-h-0 flex-col bg-muted/30 lg:flex">
@@ -110,7 +111,7 @@ export function DraftPanel({ snapshot, brands, busy }: DraftPanelProps): JSX.Ele
           )}
 
           <GuardrailList validation={validation} />
-          <PreviewExportBar snapshot={snapshot} disabled={busy} />
+          <PreviewExportBar snapshot={snapshot} disabled={busy} vendorBrand={vendorBrand} />
         </div>
       </ScrollArea>
     </aside>

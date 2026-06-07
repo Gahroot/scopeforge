@@ -2,7 +2,8 @@
  * Shared client/server contract for the conversational agent UI.
  * Type-only module: imported by both the React client and the Node SSE handler.
  */
-import type { ProposalAudience, ProposalDraft } from "../../proposal/types.js";
+import type { ProposalAuthorMetadata } from "../../project/types.js";
+import type { ProposalAudience, ProposalBrand, ProposalDraft } from "../../proposal/types.js";
 
 export interface DraftPhaseView {
   readonly name: string;
@@ -56,6 +57,7 @@ export interface ValidationSnapshot {
 
 export interface SessionSnapshot {
   readonly sessionId: string;
+  readonly author: ProposalAuthorMetadata;
   readonly draft: DraftSnapshot;
   readonly economics: EconomicsSnapshot | null;
   readonly validation: ValidationSnapshot;
@@ -65,7 +67,11 @@ export interface SessionSnapshot {
 
 /** Server-sent event frames over POST /api/agent/messages. */
 export type AgentStreamFrame =
-  | { readonly type: "session"; readonly sessionId: string }
+  | {
+      readonly type: "session";
+      readonly sessionId: string;
+      readonly author?: ProposalAuthorMetadata;
+    }
   | { readonly type: "text_delta"; readonly text: string }
   | { readonly type: "thinking_delta"; readonly text: string }
   | {
@@ -90,4 +96,11 @@ export interface AgentMessageRequest {
   readonly message: string;
   readonly brandId?: string;
   readonly audience?: ProposalAudience;
+  /** Optional collaborator identity; string author/displayName values are accepted by the local API. */
+  readonly author?: ProposalAuthorMetadata | string;
+  readonly displayName?: string;
+  /** Imported vendor brand ("My brand") — drives proposal branding. */
+  readonly vendorBrand?: ProposalBrand;
+  /** Imported client brand ("Prepared for") — seeds the proposal's preparedFor. */
+  readonly clientBrand?: ProposalBrand;
 }

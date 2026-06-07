@@ -79,6 +79,21 @@ export async function fetchBrands(signal?: AbortSignal): Promise<ApiResult<Brand
   return readJson<BrandsResponse>(response);
 }
 
+export interface BrandExtractResponse {
+  readonly ok: boolean;
+  readonly brand: ProposalBrand;
+  readonly name?: string;
+  readonly tagline?: string;
+  readonly logoUrl?: string;
+}
+
+export async function extractBrand(
+  url: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<BrandExtractResponse>> {
+  return postJson<BrandExtractResponse>("/api/brand/extract", { url }, signal);
+}
+
 async function postJson<T>(
   path: string,
   body: unknown,
@@ -102,6 +117,8 @@ export interface PreviewResponse {
 export interface ProposalRequestBody {
   readonly draft: ProposalDraft;
   readonly brandId?: string;
+  /** Full imported brand profile; takes precedence over `brandId` server-side. */
+  readonly brand?: ProposalBrand;
   readonly audience?: ProposalAudience;
 }
 
