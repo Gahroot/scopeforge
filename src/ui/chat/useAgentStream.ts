@@ -32,6 +32,7 @@ export interface AgentStreamApi {
     options?: Pick<
       AgentMessageRequest,
       | "projectId"
+      | "baseVersion"
       | "brandId"
       | "audience"
       | "author"
@@ -72,6 +73,7 @@ export function useAgentStream(): AgentStreamApi {
       options?: Pick<
         AgentMessageRequest,
         | "projectId"
+        | "baseVersion"
         | "brandId"
         | "audience"
         | "author"
@@ -96,6 +98,7 @@ export function useAgentStream(): AgentStreamApi {
         message: text,
         ...(sessionIdRef.current === null ? {} : { sessionId: sessionIdRef.current }),
         ...(options?.projectId === undefined ? {} : { projectId: options.projectId }),
+        ...(options?.baseVersion === undefined ? {} : { baseVersion: options.baseVersion }),
         ...(options?.brandId === undefined ? {} : { brandId: options.brandId }),
         ...(options?.audience === undefined ? {} : { audience: options.audience }),
         ...(options?.author === undefined ? {} : { author: options.author }),

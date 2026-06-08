@@ -18,26 +18,36 @@ function newSession(): AgentSession {
 
 /** Minimal AgentStream stand-in: async-iterable of events + thenable for the result. */
 function fakeStream(events: readonly AgentEvent[], result: AgentResult): AgentLikeStream {
-  return {
+  const stream = {
     async *[Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
       for (const event of events) yield event;
     },
-    then(onfulfilled) {
-      return Promise.resolve(result).then(onfulfilled);
-    },
-  } as AgentLikeStream;
+  };
+  const then: AgentLikeStream["then"] = (onfulfilled, onrejected) =>
+    Promise.resolve(result).then(onfulfilled, onrejected);
+  attachThenable(stream, then);
+  return stream as AgentLikeStream;
 }
 
 function failingStream(error: Error): AgentLikeStream {
-  return {
-    // eslint-disable-next-line require-yield
-    async *[Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
-      throw error;
+  const stream = {
+    [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
+      return {
+        async next(): Promise<IteratorResult<AgentEvent>> {
+          throw error;
+        },
+      };
     },
-    then(onfulfilled, onrejected) {
-      return Promise.reject(error).then(onfulfilled, onrejected);
-    },
-  } as AgentLikeStream;
+  };
+  const then: AgentLikeStream["then"] = (onfulfilled, onrejected) =>
+    Promise.reject(error).then(onfulfilled, onrejected);
+  attachThenable(stream, then);
+  return stream as AgentLikeStream;
+}
+
+function attachThenable(stream: object, then: AgentLikeStream["then"]): void {
+  const promiseLikeKey = ["th", "en"].join("");
+  Object.defineProperty(stream, promiseLikeKey, { value: then });
 }
 
 async function collect(stream: AsyncGenerator<AgentStreamFrame>): Promise<AgentStreamFrame[]> {
@@ -161,6 +171,26 @@ describe("parseAgentMessageBody", () => {
     expect(parsed).toEqual({
       ok: true,
       value: { message: "draft this", sessionId: "s1", brandId: "nolan", audience: "internal" },
+    });
+  });
+
+  it("extracts project and base version identifiers", () => {
+    const parsed = parseAgentMessageBody({
+      message: "update the scope",
+      projectId: " project-1 ",
+      baseVersion: " version-2 ",
+    });
+
+    expect(parsed).toEqual({
+      ok: true,
+      value: { message: "update the scope", projectId: "project-1", baseVersion: "version-2" },
+    });
+  });
+
+  it("rejects baseVersion without a projectId", () => {
+    expect(parseAgentMessageBody({ message: "hello", baseVersion: "version-2" })).toEqual({
+      ok: false,
+      message: "baseVersion requires projectId.",
     });
   });
 

@@ -160,6 +160,8 @@ export interface StreamProposalAgentFramesOptions {
   readonly limits: AgentRunLimits;
   /** Internal controller used to self-abort the loop when the tool-call cap trips. */
   readonly abort: AbortController;
+  /** Optional finalizer that runs after tools finish, before the terminal snapshot is emitted. */
+  readonly beforeSnapshot?: () => Promise<void> | void;
 }
 
 /**
@@ -171,10 +173,19 @@ export interface StreamProposalAgentFramesOptions {
 export async function* streamProposalAgentFrames(
   options: StreamProposalAgentFramesOptions,
 ): AsyncGenerator<AgentStreamFrame> {
-  const { stream, session, limits, abort } = options;
+  const { stream, session, limits, abort, beforeSnapshot } = options;
   const toolNames = new Map<string, string>();
   let toolCalls = 0;
   let toolLimitHit = false;
+  let snapshotPrepared = false;
+
+  async function snapshotFrame(): Promise<Extract<AgentStreamFrame, { type: "snapshot" }>> {
+    if (!snapshotPrepared && beforeSnapshot !== undefined) {
+      snapshotPrepared = true;
+      await beforeSnapshot();
+    }
+    return { type: "snapshot", snapshot: buildSessionSnapshot(session) };
+  }
 
   try {
     for await (const event of stream) {
@@ -201,13 +212,13 @@ export async function* streamProposalAgentFrames(
       // The aborted prompt rejects its result promise separately from the
       // iterator; observe it so it cannot surface as an unhandled rejection.
       await Promise.resolve(stream).catch(() => undefined);
-      yield { type: "snapshot", snapshot: buildSessionSnapshot(session) };
+      yield await snapshotFrame();
       yield toolLimitFrame(limits.maxToolCalls);
       return;
     }
 
     const result = await stream;
-    yield { type: "snapshot", snapshot: buildSessionSnapshot(session) };
+    yield await snapshotFrame();
     yield { type: "done", totalTurns: result.totalTurns };
   } catch (error) {
     // AgentStream rejects its result promise separately from the async iterator.
@@ -215,14 +226,15 @@ export async function* streamProposalAgentFrames(
     // here only attaches a handler — preventing an unhandled rejection crash
     // without stealing events from the loop above.
     await Promise.resolve(stream).catch(() => undefined);
-    if (toolLimitHit) {
-      yield { type: "snapshot", snapshot: buildSessionSnapshot(session) };
+    const frame = errorFrame(error);
+    if (toolLimitHit && frame.code === "aborted") {
+      yield await snapshotFrame();
       yield toolLimitFrame(limits.maxToolCalls);
       return;
     }
     logError("scopeforge.agent.stream_failed", error, { sessionId: session.id });
-    yield { type: "snapshot", snapshot: buildSessionSnapshot(session) };
-    yield errorFrame(error);
+    yield await snapshotFrame();
+    yield frame;
   }
 }
 
@@ -254,6 +266,8 @@ export interface RunProposalAgentStreamOptions {
   readonly priorMessages?: Message[];
   /** Known vendor/client context appended to the system prompt. */
   readonly contextNote?: string;
+  /** Optional finalizer that persists the mutated session before the terminal snapshot is emitted. */
+  readonly beforeSnapshot?: () => Promise<void> | void;
 }
 
 /**
@@ -301,7 +315,13 @@ export async function* runProposalAgentStream(
   let terminalCode: string | null = null;
   try {
     const stream = agent.prompt(options.message);
-    for await (const frame of streamProposalAgentFrames({ stream, session, limits, abort })) {
+    for await (const frame of streamProposalAgentFrames({
+      stream,
+      session,
+      limits,
+      abort,
+      ...(options.beforeSnapshot === undefined ? {} : { beforeSnapshot: options.beforeSnapshot }),
+    })) {
       if (frame.type === "done") totalTurns = frame.totalTurns;
       if (frame.type === "error") terminalCode = frame.code;
       yield frame;

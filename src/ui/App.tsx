@@ -44,6 +44,13 @@ export function App(): JSX.Element {
   );
 
   useEffect(() => {
+    const snapshot = agent.snapshot;
+    if (snapshot?.projectId !== undefined) setSelectedProjectId(snapshot.projectId);
+    if (snapshot?.projectVersionId !== undefined)
+      setSelectedProjectVersionId(snapshot.projectVersionId);
+  }, [agent.snapshot]);
+
+  useEffect(() => {
     const controller = new AbortController();
     void (async () => {
       const [healthResult, brandsResult, projectsResult] = await Promise.all([
@@ -126,6 +133,7 @@ export function App(): JSX.Element {
             agentEnabled={agentEnabled}
             displayName={collaboratorDisplayName.length === 0 ? null : collaboratorDisplayName}
             projectId={selectedProjectId}
+            baseVersion={selectedProjectVersionId}
             vendorBrand={vendorBrand}
             clientBrand={clientBrand}
           />

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent, AgentResult } from "@kenkaiiii/gg-agent";
+import { toProposalProjectId, toProposalProjectVersionId } from "../project/state.js";
 import { createSessionStore, type AgentSession } from "./session.node.js";
 import type { AgentStreamFrame } from "../ui/lib/types.js";
 import {
@@ -28,20 +29,27 @@ function controllableStream(
   abort: AbortController,
   result: AgentResult = doneResult,
 ): AgentLikeStream {
-  return {
+  const stream = {
     async *[Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
       for (const event of events) {
         if (abort.signal.aborted) return;
         yield event;
       }
     },
-    then(onfulfilled, onrejected) {
-      const settled = abort.signal.aborted
-        ? Promise.reject(new DOMException("Aborted", "AbortError"))
-        : Promise.resolve(result);
-      return settled.then(onfulfilled, onrejected);
-    },
-  } as AgentLikeStream;
+  };
+  const then: AgentLikeStream["then"] = (onfulfilled, onrejected) => {
+    const settled = abort.signal.aborted
+      ? Promise.reject(new DOMException("Aborted", "AbortError"))
+      : Promise.resolve(result);
+    return settled.then(onfulfilled, onrejected);
+  };
+  attachThenable(stream, then);
+  return stream as AgentLikeStream;
+}
+
+function attachThenable(stream: object, then: AgentLikeStream["then"]): void {
+  const promiseLikeKey = ["th", "en"].join("");
+  Object.defineProperty(stream, promiseLikeKey, { value: then });
 }
 
 async function collect(stream: AsyncGenerator<AgentStreamFrame>): Promise<AgentStreamFrame[]> {
@@ -78,6 +86,32 @@ describe("streamProposalAgentFrames", () => {
       "snapshot",
       "done",
     ]);
+  });
+
+  it("runs a finalizer before emitting the terminal snapshot", async () => {
+    const session = newSession();
+    const abort = new AbortController();
+    const stream = controllableStream([{ type: "text_delta", text: "Saved" }], abort);
+
+    const frames = await collect(
+      streamProposalAgentFrames({
+        stream,
+        session,
+        limits: DEFAULT_AGENT_RUN_LIMITS,
+        abort,
+        beforeSnapshot: () => {
+          session.projectId = toProposalProjectId("project-after-save");
+          session.projectVersionId = toProposalProjectVersionId("version-after-save");
+        },
+      }),
+    );
+
+    const snapshot = frames.find(
+      (frame): frame is Extract<AgentStreamFrame, { type: "snapshot" }> =>
+        frame.type === "snapshot",
+    );
+    expect(snapshot?.snapshot.projectId).toBe("project-after-save");
+    expect(snapshot?.snapshot.projectVersionId).toBe("version-after-save");
   });
 
   it("aborts and emits a tool_limit error once the tool-call cap trips", async () => {

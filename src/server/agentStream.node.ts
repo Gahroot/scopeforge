@@ -6,6 +6,7 @@ import {
   DEFAULT_SESSION_AUTHOR,
   applyClientBrandToSession,
   applyProjectContextToSession,
+  buildSessionProjectSourceOfTruth,
   resolveSessionBrandId,
   type AgentSession,
   type SessionProjectContext,
@@ -15,16 +16,20 @@ import {
   createProposalAuthorMetadata,
   getCurrentProjectVersion,
   toProposalProjectId,
+  toProposalProjectVersionId,
 } from "../project/state.js";
 import {
   createLocalProposalProjectStore,
   type ProposalProjectStoreLoadResult,
 } from "../project/store.node.js";
 import type {
+  CommitProposalProjectVersionInput,
   ProposalAuthorKind,
   ProposalAuthorMetadata,
   ProposalProject,
   ProposalProjectId,
+  ProposalProjectVersion,
+  ProposalProjectVersionId,
 } from "../project/types.js";
 import { validateProposalBrand } from "../proposal/brands.js";
 import type { AgentStreamFrame } from "../ui/lib/types.js";
@@ -49,6 +54,7 @@ interface AgentMessageInput {
   readonly sessionId?: string;
   readonly message: string;
   readonly projectId?: ProposalProjectId;
+  readonly baseVersion?: ProposalProjectVersionId;
   readonly brandId?: string;
   readonly audience?: ProposalAudience;
   readonly author?: ProposalAuthorMetadata;
@@ -88,6 +94,10 @@ type ParseResult =
 export interface AgentProposalProjectStore {
   readonly load?: () => Promise<ProposalProjectStoreLoadResult>;
   readonly get: (projectId: ProposalProjectId) => ProposalProject | null;
+  readonly update?: (
+    projectId: ProposalProjectId,
+    input: CommitProposalProjectVersionInput,
+  ) => Promise<ProposalProject | null>;
 }
 
 export function parseAgentMessageBody(body: unknown): ParseResult {
@@ -98,6 +108,15 @@ export function parseAgentMessageBody(body: unknown): ParseResult {
   const message = record.message;
   if (typeof message !== "string" || message.trim().length === 0) {
     return { ok: false, message: "message must be a non-empty string." };
+  }
+  const projectId =
+    typeof record.projectId === "string" && record.projectId.trim().length > 0
+      ? toProposalProjectId(record.projectId.trim())
+      : undefined;
+  const baseVersion = parseOptionalBaseVersion(record);
+  if (!baseVersion.ok) return { ok: false, message: baseVersion.message };
+  if (baseVersion.value !== undefined && projectId === undefined) {
+    return { ok: false, message: "baseVersion requires projectId." };
   }
   const audience =
     record.audience === "internal" || record.audience === "client" ? record.audience : undefined;
@@ -110,9 +129,8 @@ export function parseAgentMessageBody(body: unknown): ParseResult {
     value: {
       message: message.trim(),
       ...(typeof record.sessionId === "string" ? { sessionId: record.sessionId } : {}),
-      ...(typeof record.projectId === "string" && record.projectId.trim().length > 0
-        ? { projectId: toProposalProjectId(record.projectId.trim()) }
-        : {}),
+      ...(projectId === undefined ? {} : { projectId }),
+      ...(baseVersion.value === undefined ? {} : { baseVersion: baseVersion.value }),
       ...(typeof record.brandId === "string" ? { brandId: record.brandId } : {}),
       ...(audience === undefined ? {} : { audience }),
       ...(author.value === undefined ? {} : { author: author.value }),
@@ -120,6 +138,19 @@ export function parseAgentMessageBody(body: unknown): ParseResult {
       ...(clientBrand === undefined ? {} : { clientBrand }),
     },
   };
+}
+
+function parseOptionalBaseVersion(
+  record: Readonly<Record<string, unknown>>,
+):
+  | { readonly ok: true; readonly value?: ProposalProjectVersionId }
+  | { readonly ok: false; readonly message: string } {
+  const rawBaseVersion = record.baseVersion ?? record.baseVersionId;
+  if (rawBaseVersion === undefined || rawBaseVersion === null) return { ok: true };
+  if (typeof rawBaseVersion !== "string" || rawBaseVersion.trim().length === 0) {
+    return { ok: false, message: "baseVersion must be a non-empty string when provided." };
+  }
+  return { ok: true, value: toProposalProjectVersionId(rawBaseVersion.trim()) };
 }
 
 function parseOptionalAgentAuthor(
@@ -227,8 +258,15 @@ function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
+interface ResolvedProjectContext {
+  readonly store: AgentProposalProjectStore;
+  readonly project: ProposalProject;
+  readonly currentVersion: ProposalProjectVersion;
+  readonly sessionContext: SessionProjectContext;
+}
+
 type ProjectContextResult =
-  | { readonly ok: true; readonly value?: SessionProjectContext }
+  | { readonly ok: true; readonly value?: ResolvedProjectContext }
   | {
       readonly ok: false;
       readonly status: number;
@@ -241,11 +279,22 @@ type ProjectContextResult =
 
 async function resolveSelectedProjectContext(
   projectId: ProposalProjectId | undefined,
+  baseVersion: ProposalProjectVersionId | undefined,
   options: AgentStreamHandlerOptions,
 ): Promise<ProjectContextResult> {
   if (projectId === undefined) return { ok: true };
 
   const store = options.proposalProjectStore ?? createLocalProposalProjectStore();
+  if (store.update === undefined) {
+    return {
+      ok: false,
+      status: 503,
+      error: {
+        code: "project_store_update_unavailable",
+        message: "Proposal project storage cannot save agent changes.",
+      },
+    };
+  }
   if (store.load !== undefined) {
     try {
       const load = await store.load();
@@ -296,12 +345,33 @@ async function resolveSelectedProjectContext(
     };
   }
 
+  if (baseVersion !== undefined && baseVersion !== version.versionId) {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "base_version_conflict",
+        message: "Project has changed since the provided baseVersion.",
+        details: [
+          `provided: ${baseVersion}`,
+          `current: ${version.versionId}`,
+          "Fetch the latest project state and retry the agent message against the current version.",
+        ],
+      },
+    };
+  }
+
   return {
     ok: true,
     value: {
-      projectId: project.projectId,
-      versionId: version.versionId,
-      sourceOfTruth: version.sourceOfTruth,
+      store,
+      project,
+      currentVersion: version,
+      sessionContext: {
+        projectId: project.projectId,
+        versionId: version.versionId,
+        sourceOfTruth: version.sourceOfTruth,
+      },
     },
   };
 }
@@ -309,16 +379,6 @@ async function resolveSelectedProjectContext(
 function projectStoreLoadDetails(load: ProposalProjectStoreLoadResult): readonly string[] {
   if (load.ok) return [];
   return load.errors.map((error) => `${error.code}: ${error.path}: ${error.message}`);
-}
-
-function shouldHydrateProjectContext(
-  session: AgentSession,
-  projectContext: SessionProjectContext,
-): boolean {
-  if (session.projectId === undefined) return true;
-  if (session.projectId !== projectContext.projectId) return session.messages.length === 0;
-  if (session.projectVersionId === projectContext.versionId) return false;
-  return session.messages.length === 0;
 }
 
 export interface AgentStreamHandlerOptions {
@@ -346,28 +406,31 @@ export async function handleAgentMessages(
     return;
   }
 
-  const projectContext = await resolveSelectedProjectContext(parsed.value.projectId, options);
-  if (!projectContext.ok) {
-    response.writeHead(projectContext.status, {
+  const resolvedProject = await resolveSelectedProjectContext(
+    parsed.value.projectId,
+    parsed.value.baseVersion,
+    options,
+  );
+  if (!resolvedProject.ok) {
+    response.writeHead(resolvedProject.status, {
       "Content-Type": "application/json; charset=utf-8",
     });
-    response.end(JSON.stringify({ ok: false, error: projectContext.error }));
+    response.end(JSON.stringify({ ok: false, error: resolvedProject.error }));
     return;
   }
 
+  const projectContext = resolvedProject.value?.sessionContext;
   const session = options.sessions.getOrCreate(parsed.value.sessionId, {
     ...(parsed.value.brandId === undefined
       ? {}
       : { brandId: resolveSessionBrandId(parsed.value.brandId) }),
     ...(parsed.value.audience === undefined ? {} : { audience: parsed.value.audience }),
     ...(parsed.value.author === undefined ? {} : { author: parsed.value.author }),
-    ...(projectContext.value === undefined ? {} : { projectContext: projectContext.value }),
+    ...(projectContext === undefined ? {} : { projectContext }),
   });
-  if (
-    projectContext.value !== undefined &&
-    shouldHydrateProjectContext(session, projectContext.value)
-  ) {
-    applyProjectContextToSession(session, projectContext.value);
+  if (projectContext !== undefined) {
+    applyProjectContextToSession(session, projectContext);
+    session.messages = [];
   }
   if (parsed.value.brandId !== undefined) {
     session.brandId = resolveSessionBrandId(parsed.value.brandId);
@@ -401,14 +464,24 @@ export async function handleAgentMessages(
   });
 
   const contextNote = buildContextNote(session);
+  const projectPersistenceContext = resolvedProject.value;
+  const priorMessages =
+    projectPersistenceContext === undefined && session.messages.length > 0
+      ? session.messages
+      : undefined;
+  const persistProjectVersion =
+    projectPersistenceContext === undefined
+      ? undefined
+      : () => persistProjectBackedAgentSession(session, projectPersistenceContext);
   try {
     for await (const frame of runProposalAgentStream({
       config: options.config,
       session,
       message: parsed.value.message,
       signal: abort.signal,
-      ...(session.messages.length > 0 ? { priorMessages: session.messages } : {}),
+      ...(priorMessages === undefined ? {} : { priorMessages }),
       ...(contextNote === undefined ? {} : { contextNote }),
+      ...(persistProjectVersion === undefined ? {} : { beforeSnapshot: persistProjectVersion }),
     })) {
       write(response, frame);
     }
@@ -419,6 +492,56 @@ export async function handleAgentMessages(
     session.abort = null;
     response.end();
   }
+}
+
+async function persistProjectBackedAgentSession(
+  session: AgentSession,
+  projectContext: ResolvedProjectContext,
+): Promise<void> {
+  const sourceOfTruth = buildSessionProjectSourceOfTruth(session);
+  if (sourceOfTruth === null) {
+    throw new Error("Cannot save a project-backed agent session without vendor and client brands.");
+  }
+
+  const latestProject = projectContext.store.get(projectContext.project.projectId);
+  if (latestProject === null) {
+    throw new Error(
+      `Proposal project was not found while saving: ${projectContext.project.projectId}.`,
+    );
+  }
+  if (latestProject.currentVersionId !== projectContext.currentVersion.versionId) {
+    throw new Error(
+      `Project changed while the agent was responding. Current version is ${latestProject.currentVersionId}; retry against the latest project state.`,
+    );
+  }
+
+  const update = projectContext.store.update;
+  if (update === undefined) {
+    throw new Error("Proposal project storage cannot save agent changes.");
+  }
+
+  const updated = await update(projectContext.project.projectId, {
+    sourceOfTruth,
+    createdBy: session.createdBy,
+    parentVersionId: projectContext.currentVersion.versionId,
+    source: "agent-edit",
+    label: "Agent proposal update",
+  });
+  if (updated === null) {
+    throw new Error(
+      `Proposal project was not found while saving: ${projectContext.project.projectId}.`,
+    );
+  }
+
+  const version = getCurrentProjectVersion(updated);
+  if (version === null) {
+    throw new Error("Saved proposal project currentVersionId does not reference a stored version.");
+  }
+  applyProjectContextToSession(session, {
+    projectId: updated.projectId,
+    versionId: version.versionId,
+    sourceOfTruth: version.sourceOfTruth,
+  });
 }
 
 function write(response: ServerResponse, frame: AgentStreamFrame): void {

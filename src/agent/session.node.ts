@@ -145,6 +145,22 @@ export function applyProjectContextToSession(
   session.clientBrand = projectContext.sourceOfTruth.clientBrand;
 }
 
+/**
+ * Build the persisted source-of-truth JSON from a project-backed agent session.
+ * Returns null for legacy session-only chats that have no client brand snapshot.
+ */
+export function buildSessionProjectSourceOfTruth(
+  session: AgentSession,
+): ProposalProjectSourceOfTruth | null {
+  const vendorBrand = resolveSessionVendorBrand(session);
+  if (vendorBrand === null || session.clientBrand === null) return null;
+  return {
+    draft: session.store.current,
+    vendorBrand,
+    clientBrand: session.clientBrand,
+  } satisfies ProposalProjectSourceOfTruth;
+}
+
 export function createStarterDraft(): ProposalDraft {
   const intake: ProposalIntake = {
     project: createDefaultProject(),

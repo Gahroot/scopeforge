@@ -8,6 +8,7 @@ import {
 import {
   DEFAULT_SESSION_AUTHOR,
   applyClientBrandToSession,
+  buildSessionProjectSourceOfTruth,
   buildSessionSnapshot,
   createSessionStore,
   createStarterDraft,
@@ -59,6 +60,11 @@ describe("createSessionStore", () => {
     expect(snapshot.projectId).toBe("project-brand-context");
     expect(snapshot.projectVersionId).toBe("version-brand-context");
     expect(snapshot.fullDraft.preparedFor.companyName).toBe(BUILT_IN_BRANDS.partners.name);
+    expect(buildSessionProjectSourceOfTruth(session)).toEqual({
+      draft,
+      vendorBrand: BUILT_IN_BRANDS.nolan,
+      clientBrand: BUILT_IN_BRANDS.partners,
+    });
   });
 
   it("records a provided collaborator as the session author", () => {

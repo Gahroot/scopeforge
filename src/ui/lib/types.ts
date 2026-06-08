@@ -97,6 +97,7 @@ export interface AgentMessageRequest {
   readonly sessionId?: string;
   readonly message: string;
   readonly projectId?: string;
+  readonly baseVersion?: string;
   readonly brandId?: string;
   readonly audience?: ProposalAudience;
   /** Optional collaborator identity; string author/displayName values are accepted by the local API. */
