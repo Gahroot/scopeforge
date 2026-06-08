@@ -1,6 +1,8 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AgentCredentialsStore } from "../agent/credentials.node.js";
+import type { PendingAnthropicOAuth } from "../agent/oauth/anthropic.node.js";
 import { acmeWebsiteHtml } from "../brand/fixtures/acmeWebsite.js";
 import type { WebsiteBrandLookup } from "../brand/types.js";
 import { tritenExample } from "../data/defaults.js";
@@ -125,6 +127,66 @@ describe("server API routes", () => {
         agent: expect.objectContaining({ enabled: true, provider: "moonshot", model: "kimi-k2.6" }),
       }),
     );
+  });
+
+  it("redirects the Anthropic OAuth entrypoint directly to Claude", async () => {
+    const credentialsDir = await mkdtemp(join(tmpdir(), "scopeforge-creds-"));
+    try {
+      const pending = new Map<string, PendingAnthropicOAuth>();
+      const response = await handleApiRoute(
+        { method: "GET", pathname: "/api/agent/oauth/anthropic/authorize" },
+        {
+          credentialsStore: new AgentCredentialsStore(join(credentialsDir, "creds.json")),
+          pendingAnthropicOAuth: pending,
+        },
+      );
+      const redirect = expectBinary(response);
+      const location = redirect.headers.Location;
+      if (location === undefined) throw new Error("Expected OAuth redirect location header.");
+      const url = new URL(location);
+      const state = url.searchParams.get("state");
+      if (state === null) throw new Error("Expected OAuth state in redirect URL.");
+
+      expect(redirect.status).toBe(302);
+      expect(`${url.origin}${url.pathname}`).toBe("https://claude.ai/oauth/authorize");
+      expect(pending.get(state)?.authUrl).toBe(location);
+    } finally {
+      await rm(credentialsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("starts OpenAI subscription OAuth through the agent settings route", async () => {
+    const credentialsDir = await mkdtemp(join(tmpdir(), "scopeforge-creds-"));
+    try {
+      const credentialsStore = new AgentCredentialsStore(join(credentialsDir, "creds.json"));
+      const response = await handleApiRoute(
+        { method: "POST", pathname: "/api/agent/oauth/openai/start" },
+        {
+          credentialsStore,
+          startOpenAIOAuth: async (input) => {
+            expect(input.credentialsStore).toBe(credentialsStore);
+            return {
+              state: "openai-state",
+              authUrl: "https://auth.openai.com/oauth/authorize?state=openai-state",
+              callbackUrl: "http://localhost:1455/auth/callback",
+              expiresAt: 123,
+            };
+          },
+        },
+      );
+      const json = expectJson(response);
+
+      expect(json.status).toBe(200);
+      expect(json.body).toMatchObject({
+        ok: true,
+        state: "openai-state",
+        authUrl: "https://auth.openai.com/oauth/authorize?state=openai-state",
+        callbackUrl: "http://localhost:1455/auth/callback",
+        expiresAt: 123,
+      });
+    } finally {
+      await rm(credentialsDir, { recursive: true, force: true });
+    }
   });
 
   it("ingests source material into a proposal candidate with explicit missing inputs", async () => {

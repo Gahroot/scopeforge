@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileText, Sparkles } from "lucide-react";
+import { AgentSettingsDialog } from "./settings/AgentSettingsDialog.js";
 import { BrandBar } from "./brand/BrandBar.js";
 import type { BrandImportProjectUpdate, BrandRole } from "./brand/BrandImportDialog.js";
 import { ChatPanel } from "./chat/ChatPanel.js";
@@ -125,6 +126,14 @@ export function App(): JSX.Element {
     },
     [agent.reset, applyProjectState, authorDisplayName],
   );
+
+  const refreshHealth = useCallback(async (): Promise<void> => {
+    const result = await fetchHealth();
+    if (result.ok) {
+      setHealth(result.value);
+      setAgentEnabled(result.value.agent.enabled);
+    }
+  }, []);
 
   const handleImported = useCallback(
     (role: BrandRole, brand: ProposalBrand, projectUpdate?: BrandImportProjectUpdate): void => {
@@ -327,8 +336,9 @@ export function App(): JSX.Element {
             <div className="text-xs text-muted-foreground">
               {health === null
                 ? "Connecting…"
-                : `API v${health.apiVersion}${agentEnabled ? "" : " · agent offline"}`}
+                : `API v${health.apiVersion}${agentEnabled ? "" : " · agent offline — open Settings"}`}
             </div>
+            <AgentSettingsDialog onAgentChanged={refreshHealth} />
           </div>
         </header>
 

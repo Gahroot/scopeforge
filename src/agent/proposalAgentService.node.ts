@@ -27,7 +27,7 @@ import {
   type AgentEvent,
   type AgentResult,
 } from "@kenkaiiii/gg-agent";
-import { logError, logInfo, logWarn } from "../diagnostics/logger.node.js";
+import { addBreadcrumb, logError, logInfo, logWarn } from "../diagnostics/logger.node.js";
 import { isProposalProjectVersionConflictError } from "../project/store.node.js";
 import type { AgentStreamFrame } from "../ui/lib/types.js";
 import type { EnabledAgentConfig } from "./config.node.js";
@@ -215,6 +215,11 @@ export async function* streamProposalAgentFrames(
   try {
     for await (const event of stream) {
       if (event.type === "tool_call_start") {
+        addBreadcrumb("scopeforge.agent.tool_start", {
+          sessionId: session.id,
+          toolCallId: event.toolCallId,
+          name: event.name,
+        });
         toolCalls += 1;
         if (toolCalls > limits.maxToolCalls) {
           toolLimitHit = true;
@@ -228,6 +233,7 @@ export async function* streamProposalAgentFrames(
         }
       }
       if (event.type === "error") {
+        addBreadcrumb("scopeforge.agent.event_error", { sessionId: session.id });
         logError("scopeforge.agent.event_error", event.error, { sessionId: session.id });
       }
       for (const frame of eventToFrames(event, toolNames)) yield frame;
@@ -316,6 +322,11 @@ export async function* runProposalAgentStream(
   if (options.signal.aborted) abort.abort();
   else options.signal.addEventListener("abort", onExternalAbort, { once: true });
 
+  addBreadcrumb("scopeforge.agent.run_start", {
+    sessionId: session.id,
+    provider: options.config.provider,
+    model: options.config.model,
+  });
   logInfo("scopeforge.agent.run_start", {
     sessionId: session.id,
     provider: options.config.provider,

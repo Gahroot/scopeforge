@@ -6,13 +6,15 @@ import { performance } from "node:perf_hooks";
 import type { ViteDevServer } from "vite";
 import {
   readAgentConfigFromEnv,
+  resolveRuntimeAgentConfig,
   summarizeAgentConfig,
   type AgentConfig,
   type AgentConfigEnv,
   type AgentConfigSummary,
 } from "../agent/config.node.js";
+import { AgentCredentialsStore } from "../agent/credentials.node.js";
 import { createSessionStore, type SessionStore } from "../agent/session.node.js";
-import { installGlobalDiagnostics, logError, logEvent } from "../diagnostics/logger.node.js";
+import { addBreadcrumb, installGlobalDiagnostics, logError, logEvent } from "../diagnostics/logger.node.js";
 import { handleAgentMessages } from "./agentStream.node.js";
 import { handleApiRoute, type ApiRouteResponse, type AppRouteDependencies } from "./routes.js";
 
@@ -44,7 +46,8 @@ export interface RunningAppServer {
 interface RequestContext {
   readonly staticDir: string;
   readonly routes: AppRouteDependencies;
-  readonly agentConfig: AgentConfig;
+  readonly envAgentConfig: AgentConfig;
+  readonly credentialsStore: AgentCredentialsStore;
   readonly sessions: SessionStore;
   vite: ViteDevServer | null;
 }
@@ -62,7 +65,10 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ru
   installGlobalDiagnostics();
   const agentConfig =
     options.agentConfig ?? readAgentConfigFromEnv(options.agentEnv ?? process.env);
-  const agentSummary = summarizeAgentConfig(agentConfig);
+  const credentialsStore = options.routes?.credentialsStore ?? new AgentCredentialsStore();
+  const agentSummary = summarizeAgentConfig(
+    await resolveRuntimeAgentConfig({ envConfig: agentConfig, credentialsStore }),
+  );
   const root = resolve(options.root ?? process.cwd());
   const staticDir = resolve(root, options.staticDir ?? DEFAULT_STATIC_DIR);
   const host = options.host ?? process.env.SCOPEFORGE_APP_HOST ?? DEFAULT_HOST;
@@ -71,8 +77,9 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ru
 
   const context: RequestContext = {
     staticDir,
-    routes: { ...(options.routes ?? {}), agentSummary },
-    agentConfig,
+    routes: { ...(options.routes ?? {}), agentSummary, envAgentConfig: agentConfig, credentialsStore },
+    envAgentConfig: agentConfig,
+    credentialsStore,
     sessions: createSessionStore(
       options.sessionIdFactory === undefined ? {} : { idFactory: options.sessionIdFactory },
     ),
@@ -128,17 +135,24 @@ async function handleNodeRequest(
   try {
     const url = new URL(request.url ?? "/", "http://scopeforge.local");
     pathname = url.pathname;
+    addBreadcrumb("scopeforge.request.received", { method, pathname });
 
     if (pathname.startsWith("/api")) {
+      addBreadcrumb("scopeforge.request.api", { method, pathname });
       const bodyResult = await readJsonBody(request);
       if (!bodyResult.ok) {
         status = bodyResult.response.status;
+        addBreadcrumb("scopeforge.request.body_rejected", { method, pathname, status });
         sendRouteResponse(response, bodyResult.response);
         return;
       }
 
       if (method === "POST" && pathname === "/api/agent/messages") {
-        if (!context.agentConfig.enabled) {
+        const agentConfig = await resolveRuntimeAgentConfig({
+          envConfig: context.envAgentConfig,
+          credentialsStore: context.credentialsStore,
+        });
+        if (!agentConfig.enabled) {
           status = 503;
           sendRouteResponse(
             response,
@@ -147,16 +161,17 @@ async function handleNodeRequest(
               error: {
                 code: "agent_disabled",
                 message:
-                  context.agentConfig.reason === "disabled_by_env"
+                  agentConfig.reason === "disabled_by_env"
                     ? "The agent is disabled by SCOPEFORGE_AGENT_ENABLED."
-                    : "The agent is not configured. Set SCOPEFORGE_AGENT_* environment variables.",
+                    : "The agent is not configured. Add credentials in Settings or set SCOPEFORGE_AGENT_* environment variables.",
               },
             }),
           );
           return;
         }
+        addBreadcrumb("scopeforge.request.agent_stream_start", { pathname });
         await handleAgentMessages(request, response, bodyResult.value, {
-          config: context.agentConfig,
+          config: agentConfig,
           sessions: context.sessions,
           ...(context.routes.proposalProjectStore === undefined
             ? {}
@@ -169,6 +184,7 @@ async function handleNodeRequest(
         return;
       }
 
+      addBreadcrumb("scopeforge.request.route_dispatch", { method, pathname });
       const apiResponse = await handleApiRoute(
         {
           method,
@@ -191,15 +207,18 @@ async function handleNodeRequest(
     }
 
     if (context.vite !== null) {
+      addBreadcrumb("scopeforge.request.vite_middleware", { pathname });
       await serveViteMiddleware(context.vite, request, response);
       status = response.statusCode;
       if (!response.writableEnded) {
+        addBreadcrumb("scopeforge.request.static_fallback", { pathname });
         await serveStaticFile(request, response, context.staticDir);
         status = response.statusCode;
       }
       return;
     }
 
+    addBreadcrumb("scopeforge.request.static_file", { pathname });
     await serveStaticFile(request, response, context.staticDir);
     status = response.statusCode;
   } catch (error) {
@@ -275,6 +294,7 @@ async function readJsonBody(request: IncomingMessage): Promise<JsonBodyResult> {
   try {
     return { ok: true, value: JSON.parse(rawBody) as unknown };
   } catch (error) {
+    addBreadcrumb("scopeforge.request.invalid_json", { bytes: rawBody.length });
     logEvent("debug", "scopeforge.request.invalid_json", { error, bytes: rawBody.length });
     return {
       ok: false,

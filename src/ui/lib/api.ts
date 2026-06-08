@@ -11,11 +11,13 @@ import type {
   SourceMaterialKind,
 } from "../../ingest/types.js";
 import type { ProposalAudience, ProposalBrand, ProposalDraft } from "../../proposal/types.js";
+import { addClientBreadcrumb, logClientError } from "./diagnostics.js";
 
 export interface HealthAgentSummary {
   readonly enabled: boolean;
   readonly provider?: string;
   readonly model?: string;
+  readonly accountId?: string;
 }
 
 export interface HealthResponse {
@@ -24,6 +26,43 @@ export interface HealthResponse {
   readonly apiVersion: number;
   readonly agent: HealthAgentSummary;
   readonly capabilities: readonly string[];
+}
+
+export interface AgentCredentialSummary {
+  readonly provider: string;
+  readonly configured: boolean;
+  readonly authKind?: "api_key" | "oauth";
+  readonly expiresAt?: number;
+  readonly accountId?: string;
+  readonly email?: string;
+}
+
+export interface AgentSettingsResponse {
+  readonly ok: boolean;
+  readonly providers: readonly { readonly provider: string; readonly label: string }[];
+  readonly settings: { readonly provider: string; readonly model: string; readonly baseUrl?: string };
+  readonly credentials: readonly AgentCredentialSummary[];
+  readonly agent: HealthAgentSummary;
+}
+
+export interface AgentCredentialMutationResponse {
+  readonly ok: boolean;
+  readonly credentials: AgentCredentialSummary;
+  readonly agent: HealthAgentSummary;
+}
+
+export interface AnthropicOAuthStartResponse {
+  readonly ok: boolean;
+  readonly authUrl: string;
+  readonly state: string;
+}
+
+export interface OpenAIOAuthStartResponse {
+  readonly ok: boolean;
+  readonly authUrl: string;
+  readonly state: string;
+  readonly callbackUrl: string;
+  readonly expiresAt: number;
 }
 
 export interface BrandsResponse {
@@ -46,7 +85,11 @@ async function readJson<T>(response: Response): Promise<ApiResult<T>> {
   let payload: unknown;
   try {
     payload = await response.json();
-  } catch {
+  } catch (error) {
+    logClientError("scopeforge.client.invalid_json_response", error, {
+      status: response.status,
+      url: response.url,
+    });
     return {
       ok: false,
       error: {
@@ -58,6 +101,11 @@ async function readJson<T>(response: Response): Promise<ApiResult<T>> {
 
   if (!response.ok) {
     const error = extractError(payload);
+    addClientBreadcrumb("scopeforge.client.http_error", {
+      status: response.status,
+      url: response.url,
+      code: error.code,
+    });
     return { ok: false, error };
   }
   return { ok: true, value: payload as T };
@@ -86,13 +134,56 @@ function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
 }
 
 export async function fetchHealth(signal?: AbortSignal): Promise<ApiResult<HealthResponse>> {
-  const response = await fetch("/api/health", signal === undefined ? {} : { signal });
-  return readJson<HealthResponse>(response);
+  return getJson<HealthResponse>("/api/health", signal);
 }
 
 export async function fetchBrands(signal?: AbortSignal): Promise<ApiResult<BrandsResponse>> {
-  const response = await fetch("/api/brands", signal === undefined ? {} : { signal });
-  return readJson<BrandsResponse>(response);
+  return getJson<BrandsResponse>("/api/brands", signal);
+}
+
+export async function fetchAgentSettings(signal?: AbortSignal): Promise<ApiResult<AgentSettingsResponse>> {
+  return getJson<AgentSettingsResponse>("/api/agent/settings", signal);
+}
+
+export async function updateAgentSettings(
+  body: { readonly provider?: string; readonly model?: string; readonly baseUrl?: string },
+  signal?: AbortSignal,
+): Promise<ApiResult<AgentSettingsResponse>> {
+  return patchJson<AgentSettingsResponse>("/api/agent/settings", body, signal);
+}
+
+export async function saveAgentApiKey(
+  provider: string,
+  apiKey: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<AgentCredentialMutationResponse>> {
+  return postJson<AgentCredentialMutationResponse>("/api/agent/credentials/api-key", { provider, apiKey }, signal);
+}
+
+export async function clearAgentCredentials(
+  provider: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<AgentCredentialMutationResponse>> {
+  return deleteJson<AgentCredentialMutationResponse>(`/api/agent/credentials/${encodeURIComponent(provider)}`, signal);
+}
+
+export async function startAnthropicOAuth(signal?: AbortSignal): Promise<ApiResult<AnthropicOAuthStartResponse>> {
+  return postJson<AnthropicOAuthStartResponse>("/api/agent/oauth/anthropic/start", {}, signal);
+}
+
+export async function completeAnthropicOAuth(
+  codeWithState: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<AgentCredentialMutationResponse>> {
+  return postJson<AgentCredentialMutationResponse>("/api/agent/oauth/anthropic/complete", { codeWithState }, signal);
+}
+
+export async function startOpenAIOAuth(signal?: AbortSignal): Promise<ApiResult<OpenAIOAuthStartResponse>> {
+  return postJson<OpenAIOAuthStartResponse>("/api/agent/oauth/openai/start", {}, signal);
+}
+
+export async function refreshOpenAIOAuth(signal?: AbortSignal): Promise<ApiResult<AgentCredentialMutationResponse>> {
+  return postJson<AgentCredentialMutationResponse>("/api/agent/oauth/openai/refresh", {}, signal);
 }
 
 export interface BrandExtractResponse {
@@ -178,30 +269,27 @@ export interface CreateProposalProjectResponse {
 export async function fetchProposalProjects(
   signal?: AbortSignal,
 ): Promise<ApiResult<ProposalProjectsResponse>> {
-  const response = await fetch("/api/proposal-projects", signal === undefined ? {} : { signal });
-  return readJson<ProposalProjectsResponse>(response);
+  return getJson<ProposalProjectsResponse>("/api/proposal-projects", signal);
 }
 
 export async function fetchProposalProjectState(
   projectId: string,
   signal?: AbortSignal,
 ): Promise<ApiResult<ProposalProjectStateResponse>> {
-  const response = await fetch(
+  return getJson<ProposalProjectStateResponse>(
     `/api/proposal-projects/${encodeURIComponent(projectId)}`,
-    signal === undefined ? {} : { signal },
+    signal,
   );
-  return readJson<ProposalProjectStateResponse>(response);
 }
 
 export async function fetchProposalProjectUpdates(
   projectId: string,
   signal?: AbortSignal,
 ): Promise<ApiResult<ProposalProjectUpdatesResponse>> {
-  const response = await fetch(
+  return getJson<ProposalProjectUpdatesResponse>(
     `/api/proposal-projects/${encodeURIComponent(projectId)}/updates`,
-    signal === undefined ? {} : { signal },
+    signal,
   );
-  return readJson<ProposalProjectUpdatesResponse>(response);
 }
 
 export async function createProposalProject(
@@ -262,18 +350,72 @@ export async function ingestSourceMaterial(
   return postJson<SourceMaterialIngestResponse>("/api/source-material/ingest", body, signal);
 }
 
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<ApiResult<T>> {
+  addClientBreadcrumb("scopeforge.client.request_start", { method: "GET", path });
+  try {
+    const response = await fetch(path, signal === undefined ? {} : { signal });
+    addClientBreadcrumb("scopeforge.client.response", { method: "GET", path, status: response.status });
+    return readJson<T>(response);
+  } catch (error) {
+    logClientError("scopeforge.client.request_failed", error, { method: "GET", path });
+    return networkFailure(error);
+  }
+}
+
+async function patchJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<ApiResult<T>> {
+  return methodJson<T>("PATCH", path, body, signal);
+}
+
+async function deleteJson<T>(path: string, signal?: AbortSignal): Promise<ApiResult<T>> {
+  addClientBreadcrumb("scopeforge.client.request_start", { method: "DELETE", path });
+  try {
+    const response = await fetch(path, { method: "DELETE", ...(signal === undefined ? {} : { signal }) });
+    addClientBreadcrumb("scopeforge.client.response", { method: "DELETE", path, status: response.status });
+    return readJson<T>(response);
+  } catch (error) {
+    logClientError("scopeforge.client.request_failed", error, { method: "DELETE", path });
+    return networkFailure(error);
+  }
+}
+
 async function postJson<T>(
   path: string,
   body: unknown,
   signal?: AbortSignal,
 ): Promise<ApiResult<T>> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    ...(signal === undefined ? {} : { signal }),
-  });
-  return readJson<T>(response);
+  return methodJson<T>("POST", path, body, signal);
+}
+
+async function methodJson<T>(
+  method: "PATCH" | "POST",
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<ApiResult<T>> {
+  addClientBreadcrumb("scopeforge.client.request_start", { method, path });
+  try {
+    const response = await fetch(path, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      ...(signal === undefined ? {} : { signal }),
+    });
+    addClientBreadcrumb("scopeforge.client.response", { method, path, status: response.status });
+    return readJson<T>(response);
+  } catch (error) {
+    logClientError("scopeforge.client.request_failed", error, { method, path });
+    return networkFailure(error);
+  }
+}
+
+function networkFailure<T>(error: unknown): ApiResult<T> {
+  return {
+    ok: false,
+    error: {
+      code: error instanceof DOMException && error.name === "AbortError" ? "aborted" : "network_error",
+      message: error instanceof Error ? error.message : String(error),
+    },
+  };
 }
 
 export interface PreviewResponse {
@@ -350,12 +492,20 @@ async function exportPdfFromPath(
   body: ProposalRequestBody | ProjectProposalRequestBody,
   signal?: AbortSignal,
 ): Promise<ApiResult<ExportPdfResult>> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  addClientBreadcrumb("scopeforge.client.request_start", { method: "POST", path, kind: "pdf" });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      ...(signal === undefined ? {} : { signal }),
+    });
+  } catch (error) {
+    logClientError("scopeforge.client.request_failed", error, { method: "POST", path, kind: "pdf" });
+    return networkFailure(error);
+  }
+  addClientBreadcrumb("scopeforge.client.response", { method: "POST", path, status: response.status });
 
   if (!response.ok) {
     return readJson<never>(response) as Promise<ApiResult<ExportPdfResult>>;

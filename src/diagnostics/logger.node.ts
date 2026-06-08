@@ -37,16 +37,25 @@ export interface SerializedError {
   readonly nonError?: unknown;
 }
 
+export interface DiagnosticBreadcrumb {
+  readonly timestamp: string;
+  readonly event: string;
+  readonly [key: string]: unknown;
+}
+
 export interface DiagnosticRecord {
   readonly timestamp: string;
   readonly level: LogLevel;
   readonly event: string;
   readonly message?: string;
   readonly error?: SerializedError;
+  readonly breadcrumbs?: readonly DiagnosticBreadcrumb[];
   readonly [key: string]: unknown;
 }
 
 const STANDARD_ERROR_KEYS = new Set(["name", "message", "stack", "cause", "code", "errors"]);
+const DEFAULT_MAX_BREADCRUMBS = 80;
+let breadcrumbs: DiagnosticBreadcrumb[] = [];
 
 /**
  * Recursively serialize any thrown value into a plain, JSON-safe shape. Captures
@@ -114,6 +123,45 @@ export function isLevelEnabled(level: LogLevel, env: NodeJS.ProcessEnv = process
   return LEVEL_RANK[level] >= LEVEL_RANK[resolveLogLevel(env)];
 }
 
+export function addBreadcrumb(
+  event: string,
+  fields: Readonly<Record<string, unknown>> = {},
+): DiagnosticBreadcrumb {
+  const crumb = buildBreadcrumb(event, fields);
+  breadcrumbs = [...breadcrumbs, crumb].slice(-maxBreadcrumbs(process.env));
+  return crumb;
+}
+
+export function getBreadcrumbs(): readonly DiagnosticBreadcrumb[] {
+  return breadcrumbs;
+}
+
+export function clearBreadcrumbs(): void {
+  breadcrumbs = [];
+}
+
+function buildBreadcrumb(
+  event: string,
+  fields: Readonly<Record<string, unknown>>,
+): DiagnosticBreadcrumb {
+  const crumb: Record<string, unknown> = {
+    timestamp: new Date().toISOString(),
+    event,
+  };
+  for (const [key, val] of Object.entries(fields)) {
+    if (val !== undefined) crumb[key] = jsonSafe(val);
+  }
+  return crumb as DiagnosticBreadcrumb;
+}
+
+function maxBreadcrumbs(env: NodeJS.ProcessEnv): number {
+  const raw = env.SCOPEFORGE_LOG_BREADCRUMBS;
+  if (raw === undefined) return DEFAULT_MAX_BREADCRUMBS;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) return DEFAULT_MAX_BREADCRUMBS;
+  return parsed;
+}
+
 /** Build a diagnostic record without emitting it (used by tests + the writers). */
 export function buildRecord(
   level: LogLevel,
@@ -130,7 +178,10 @@ export function buildRecord(
   for (const [key, val] of Object.entries(rest)) {
     if (val !== undefined) base[key] = jsonSafe(val);
   }
-  if (error !== undefined) base.error = serializeError(error);
+  if (error !== undefined) {
+    base.error = serializeError(error);
+    if (breadcrumbs.length > 0) base.breadcrumbs = breadcrumbs;
+  }
   return base as DiagnosticRecord;
 }
 

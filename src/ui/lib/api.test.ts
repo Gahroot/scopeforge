@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProposalDraft } from "../../proposal/types.js";
+import { clearClientBreadcrumbs, getClientBreadcrumbs } from "./diagnostics.js";
 import {
   createProposalProject,
   exportProposalProjectPdf,
@@ -11,6 +12,7 @@ import {
 
 describe("UI API client", () => {
   afterEach(() => {
+    clearClientBreadcrumbs();
     vi.unstubAllGlobals();
   });
 
@@ -213,6 +215,31 @@ describe("UI API client", () => {
       }),
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns and logs diagnostic breadcrumbs for network failures", async () => {
+    const written: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((message: unknown) => {
+      written.push(String(message));
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("failed to fetch");
+      }),
+    );
+
+    const result = await fetchProposalProjectUpdates("project 1");
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "network_error", message: "failed to fetch" },
+    });
+    expect(getClientBreadcrumbs().map((crumb) => crumb.event)).toContain(
+      "scopeforge.client.request_start",
+    );
+    const parsed = JSON.parse(written[0] ?? "{}") as { readonly breadcrumbs?: readonly unknown[] };
+    expect(parsed.breadcrumbs?.length).toBeGreaterThan(0);
   });
 
   it("preserves latest project metadata from conflict API responses", async () => {

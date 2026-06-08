@@ -69,6 +69,7 @@ export function buildProposalAgent(options: BuildProposalAgentOptions): Agent {
     maxTurns: maxTurns ?? DEFAULT_MAX_TURNS,
     ...(temperature === undefined ? {} : { temperature }),
     ...(priorMessages === undefined ? {} : { priorMessages }),
+    ...(config.accountId === undefined ? {} : { accountId: config.accountId }),
     ...(config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl }),
     ...(config.maxTokens === undefined ? {} : { maxTokens: config.maxTokens }),
     ...(config.thinking === undefined ? {} : { thinking: config.thinking }),

@@ -8,8 +8,24 @@ import type {
   WebsiteBrandLookup,
   WebsiteBrandManualOverrides,
 } from "../brand/types.js";
-import type { AgentConfigSummary } from "../agent/config.node.js";
-import { logError, logEvent } from "../diagnostics/logger.node.js";
+import {
+  AGENT_PROVIDER_IDS,
+  isAgentProvider,
+  resolveRuntimeAgentConfig,
+  summarizeAgentConfig,
+  type AgentConfig,
+  type AgentConfigSummary,
+  type AgentProvider,
+} from "../agent/config.node.js";
+import { AgentCredentialsStore, type StoredAgentSettings } from "../agent/credentials.node.js";
+import {
+  completeAnthropicOAuth,
+  parseAnthropicCodeInput,
+  startAnthropicOAuth,
+  type PendingAnthropicOAuth,
+} from "../agent/oauth/anthropic.node.js";
+import { startOpenAIOAuth, type PendingOpenAIOAuth } from "../agent/oauth/openai.node.js";
+import { addBreadcrumb, logError, logEvent } from "../diagnostics/logger.node.js";
 import {
   analyzeProject,
   DEFAULT_ITERATIONS,
@@ -117,6 +133,11 @@ const DEFAULT_PROJECT_AUTHOR = createProposalAuthorMetadata({
   displayName: "Local collaborator",
   kind: "human",
 });
+const SUPPORTED_AGENT_PROVIDERS = AGENT_PROVIDER_IDS.map((provider) => ({
+  provider,
+  label: providerLabel(provider),
+}));
+
 const PROPOSAL_BRAND_COLOR_KEYS = [
   "primary",
   "secondary",
@@ -209,6 +230,10 @@ export interface AppRouteDependencies {
   readonly brandLookupHost?: WebsiteBrandLookup;
   readonly brandNow?: () => Date;
   readonly agentSummary?: AgentConfigSummary;
+  readonly envAgentConfig?: AgentConfig;
+  readonly credentialsStore?: AgentCredentialsStore;
+  readonly pendingAnthropicOAuth?: Map<string, PendingAnthropicOAuth>;
+  readonly startOpenAIOAuth?: (input: { readonly credentialsStore: AgentCredentialsStore }) => Promise<PendingOpenAIOAuth>;
   readonly runProposalAgentStream?: ProposalAgentStreamRunner;
 }
 
@@ -283,11 +308,14 @@ export async function handleApiRoute(
 ): Promise<ApiRouteResponse | null> {
   const pathname = canonicalPath(request.pathname);
   if (!pathname.startsWith(API_PREFIX)) return null;
+  addBreadcrumb("scopeforge.route.canonicalized", { method: request.method, pathname });
 
   if (request.method === "OPTIONS") return noContentResponse();
   if (request.method === "GET" && pathname === "/api/health") {
-    return healthResponse(dependencies.agentSummary);
+    return healthResponse(await resolveAgentSummary(dependencies));
   }
+  const agentSettingsResponse = await handleAgentSettingsRoute(request, pathname, dependencies);
+  if (agentSettingsResponse !== null) return agentSettingsResponse;
   if (request.method === "GET" && pathname === "/api/brands") return brandsResponse();
   if (request.method === "POST" && pathname === "/api/source-material/ingest") {
     return ingestSourceMaterialResponse(request.body);
@@ -295,6 +323,12 @@ export async function handleApiRoute(
 
   const proposalProjectRoute = parseProposalProjectRoute(pathname);
   if (proposalProjectRoute !== null) {
+    addBreadcrumb("scopeforge.route.proposal_project", {
+      method: request.method,
+      pathname,
+      action: proposalProjectRoute.action,
+      projectId: "projectId" in proposalProjectRoute ? proposalProjectRoute.projectId : undefined,
+    });
     return handleProposalProjectRoute(proposalProjectRoute, request, dependencies);
   }
 
@@ -1938,6 +1972,273 @@ function slugifyRouteIdentifier(input: string, fallback: string): string {
   return slug.length === 0 ? fallback : slug;
 }
 
+async function handleAgentSettingsRoute(
+  request: AppRouteRequest,
+  pathname: string,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse | null> {
+  const store = dependencies.credentialsStore;
+  if (store === undefined) return null;
+  if (request.method === "GET" && pathname === "/api/agent/settings")
+    return agentSettingsResponse(dependencies);
+  if (request.method === "PATCH" && pathname === "/api/agent/settings")
+    return updateAgentSettingsResponse(request.body, dependencies);
+  if (request.method === "POST" && pathname === "/api/agent/credentials/api-key")
+    return saveAgentApiKeyResponse(request.body, dependencies);
+  if (request.method === "DELETE" && pathname.startsWith("/api/agent/credentials/")) {
+    const provider = pathname.slice("/api/agent/credentials/".length);
+    return clearAgentCredentialsResponse(provider, dependencies);
+  }
+  if (request.method === "GET" && pathname === "/api/agent/oauth/anthropic/authorize")
+    return redirectAnthropicOAuthResponse(dependencies);
+  if (request.method === "POST" && pathname === "/api/agent/oauth/anthropic/start")
+    return startAnthropicOAuthResponse(dependencies);
+  if (request.method === "POST" && pathname === "/api/agent/oauth/anthropic/complete")
+    return completeAnthropicOAuthResponse(request.body, dependencies);
+  if (request.method === "POST" && pathname === "/api/agent/oauth/anthropic/refresh") {
+    const summary = await store.refreshCredentials("anthropic");
+    return jsonResponse(200, {
+      ok: true,
+      credentials: summary,
+      agent: await resolveAgentSummary(dependencies),
+    });
+  }
+  if (request.method === "GET" && pathname === "/api/agent/oauth/openai/authorize")
+    return redirectOpenAIOAuthResponse(dependencies);
+  if (request.method === "POST" && pathname === "/api/agent/oauth/openai/start")
+    return startOpenAIOAuthResponse(dependencies);
+  if (request.method === "POST" && pathname === "/api/agent/oauth/openai/refresh") {
+    const summary = await store.refreshCredentials("openai");
+    return jsonResponse(200, {
+      ok: true,
+      credentials: summary,
+      agent: await resolveAgentSummary(dependencies),
+    });
+  }
+  return null;
+}
+
+async function agentSettingsResponse(
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const store = dependencies.credentialsStore ?? new AgentCredentialsStore();
+  return jsonResponse(200, {
+    ok: true,
+    providers: SUPPORTED_AGENT_PROVIDERS,
+    settings: await store.getSettings(),
+    credentials: await store.listCredentialSummaries(),
+    agent: await resolveAgentSummary(dependencies),
+  });
+}
+
+async function updateAgentSettingsResponse(
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  if (!isRecord(input))
+    return failureResponse(400, "agent_settings_invalid", "Settings body must be a JSON object.");
+  const provider = readOptionalString(input, "provider");
+  const model = readOptionalString(input, "model");
+  const update: Partial<StoredAgentSettings> = {};
+  if (provider !== undefined) {
+    if (!isAgentProvider(provider))
+      return failureResponse(
+        400,
+        "agent_provider_invalid",
+        `Provider must be one of: ${AGENT_PROVIDER_IDS.join(", ")}.`,
+      );
+    update.provider = provider;
+  }
+  if (model !== undefined) update.model = model;
+  const baseUrl = readOptionalString(input, "baseUrl");
+  if (baseUrl !== undefined) update.baseUrl = baseUrl;
+  const store = dependencies.credentialsStore ?? new AgentCredentialsStore();
+  const settings = await store.updateSettings(update);
+  return jsonResponse(200, { ok: true, settings, agent: await resolveAgentSummary(dependencies) });
+}
+
+async function saveAgentApiKeyResponse(
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  if (!isRecord(input))
+    return failureResponse(
+      400,
+      "agent_api_key_invalid",
+      "API key request body must be a JSON object.",
+    );
+  const provider = readOptionalString(input, "provider");
+  const apiKey = readOptionalString(input, "apiKey");
+  if (provider === undefined || !isAgentProvider(provider))
+    return failureResponse(
+      400,
+      "agent_provider_invalid",
+      `Provider must be one of: ${AGENT_PROVIDER_IDS.join(", ")}.`,
+    );
+  if (apiKey === undefined)
+    return failureResponse(400, "agent_api_key_missing", "apiKey must be a non-empty string.");
+  const store = dependencies.credentialsStore ?? new AgentCredentialsStore();
+  const credentials = await store.setApiKeyCredentials(provider, apiKey);
+  return jsonResponse(200, {
+    ok: true,
+    credentials,
+    agent: await resolveAgentSummary(dependencies),
+  });
+}
+
+async function clearAgentCredentialsResponse(
+  providerInput: string,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  if (!isAgentProvider(providerInput))
+    return failureResponse(
+      400,
+      "agent_provider_invalid",
+      `Provider must be one of: ${AGENT_PROVIDER_IDS.join(", ")}.`,
+    );
+  const store = dependencies.credentialsStore ?? new AgentCredentialsStore();
+  const credentials = await store.clearCredentials(providerInput);
+  return jsonResponse(200, {
+    ok: true,
+    credentials,
+    agent: await resolveAgentSummary(dependencies),
+  });
+}
+
+async function redirectAnthropicOAuthResponse(
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const transaction = await createPendingAnthropicOAuthTransaction(dependencies);
+  return redirectResponse(transaction.authUrl);
+}
+
+async function startAnthropicOAuthResponse(
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const transaction = await createPendingAnthropicOAuthTransaction(dependencies);
+  return jsonResponse(200, { ok: true, authUrl: transaction.authUrl, state: transaction.state });
+}
+
+async function createPendingAnthropicOAuthTransaction(
+  dependencies: AppRouteDependencies,
+): Promise<PendingAnthropicOAuth> {
+  const pending = dependencies.pendingAnthropicOAuth ?? defaultPendingAnthropicOAuth;
+  const transaction = await startAnthropicOAuth();
+  pending.set(transaction.state, transaction);
+  return transaction;
+}
+
+async function completeAnthropicOAuthResponse(
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  if (!isRecord(input))
+    return failureResponse(
+      400,
+      "anthropic_oauth_invalid",
+      "OAuth completion body must be a JSON object.",
+    );
+  const codeWithState = readOptionalString(input, "codeWithState");
+  const codeInput = codeWithState ?? readOptionalString(input, "code");
+  if (codeInput === undefined)
+    return failureResponse(
+      400,
+      "anthropic_oauth_code_missing",
+      "Paste the Anthropic code or code#state.",
+    );
+  const parsed = parseAnthropicCodeInput(codeInput);
+  const state = parsed.state ?? readOptionalString(input, "state");
+  if (state === undefined)
+    return failureResponse(400, "anthropic_oauth_state_missing", "OAuth state is required.");
+  const pending = dependencies.pendingAnthropicOAuth ?? defaultPendingAnthropicOAuth;
+  const transaction = pending.get(state);
+  if (transaction === undefined || transaction.expiresAt < Date.now())
+    return failureResponse(
+      400,
+      "anthropic_oauth_state_invalid",
+      "OAuth state is missing or expired. Start sign-in again.",
+    );
+  pending.delete(state);
+  const credentials = await completeAnthropicOAuth({
+    code: parsed.code,
+    state,
+    expectedState: transaction.state,
+    verifier: transaction.verifier,
+  });
+  const store = dependencies.credentialsStore ?? new AgentCredentialsStore();
+  const summary = await store.setOAuthCredentials("anthropic", credentials);
+  return jsonResponse(200, {
+    ok: true,
+    credentials: summary,
+    agent: await resolveAgentSummary(dependencies),
+  });
+}
+
+async function redirectOpenAIOAuthResponse(
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const transaction = await createPendingOpenAIOAuthTransaction(dependencies);
+  return redirectResponse(transaction.authUrl);
+}
+
+async function startOpenAIOAuthResponse(dependencies: AppRouteDependencies): Promise<ApiRouteResponse> {
+  const transaction = await createPendingOpenAIOAuthTransaction(dependencies);
+  return jsonResponse(200, {
+    ok: true,
+    authUrl: transaction.authUrl,
+    state: transaction.state,
+    callbackUrl: transaction.callbackUrl,
+    expiresAt: transaction.expiresAt,
+  });
+}
+
+async function createPendingOpenAIOAuthTransaction(
+  dependencies: AppRouteDependencies,
+): Promise<PendingOpenAIOAuth> {
+  const store = dependencies.credentialsStore ?? new AgentCredentialsStore();
+  const start = dependencies.startOpenAIOAuth ?? startOpenAIOAuth;
+  return start({ credentialsStore: store });
+}
+
+const defaultPendingAnthropicOAuth = new Map<string, PendingAnthropicOAuth>();
+
+async function resolveAgentSummary(
+  dependencies: AppRouteDependencies,
+): Promise<AgentConfigSummary> {
+  if (dependencies.envAgentConfig === undefined || dependencies.credentialsStore === undefined) {
+    return dependencies.agentSummary ?? { enabled: false };
+  }
+  return summarizeAgentConfig(
+    await resolveRuntimeAgentConfig({
+      envConfig: dependencies.envAgentConfig,
+      credentialsStore: dependencies.credentialsStore,
+    }),
+  );
+}
+
+function providerLabel(provider: AgentProvider): string {
+  switch (provider) {
+    case "anthropic":
+      return "Anthropic";
+    case "openai":
+      return "OpenAI";
+    case "gemini":
+      return "Gemini";
+    case "glm":
+      return "GLM/Z.ai";
+    case "moonshot":
+      return "Moonshot/Kimi";
+    case "deepseek":
+      return "DeepSeek";
+    case "openrouter":
+      return "OpenRouter";
+    case "minimax":
+      return "MiniMax";
+    case "xiaomi":
+      return "Xiaomi";
+  }
+}
+
 function healthResponse(agentSummary?: AgentConfigSummary): ApiRouteResponse {
   return jsonResponse(200, {
     ok: true,
@@ -1963,6 +2264,10 @@ function healthResponse(agentSummary?: AgentConfigSummary): ApiRouteResponse {
       "brand.validate",
       "brand.extractWebsite",
       "agent.messages",
+      "agent.settings",
+      "agent.credentials.apiKey",
+      "agent.oauth.anthropic",
+      "agent.oauth.openai",
       "brand.fromWebsite.reserved",
     ],
   });
@@ -2911,6 +3216,19 @@ function noContentResponse(): ApiRouteResponse {
     status: 204,
     headers: {
       "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    },
+    body: new Uint8Array(),
+  };
+}
+
+function redirectResponse(location: string): ApiRouteResponse {
+  return {
+    kind: "binary",
+    status: 302,
+    headers: {
+      "Cache-Control": "no-store",
+      Location: location,
       "X-Content-Type-Options": "nosniff",
     },
     body: new Uint8Array(),

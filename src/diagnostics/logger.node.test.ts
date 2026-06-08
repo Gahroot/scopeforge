@@ -1,5 +1,8 @@
 import {
+  addBreadcrumb,
   buildRecord,
+  clearBreadcrumbs,
+  getBreadcrumbs,
   installGlobalDiagnostics,
   isLevelEnabled,
   logError,
@@ -86,6 +89,7 @@ describe("resolveLogLevel / isLevelEnabled", () => {
 
 describe("buildRecord", () => {
   it("includes event, level, and serialized error but drops undefined fields", () => {
+    clearBreadcrumbs();
     const record = buildRecord("error", "scopeforge.test.failure", {
       error: new Error("nope"),
       pathname: "/api/x",
@@ -98,6 +102,40 @@ describe("buildRecord", () => {
     expect("missing" in record).toBe(false);
     expect(record.error?.message).toBe("nope");
     expect(typeof record.timestamp).toBe("string");
+  });
+
+  it("attaches breadcrumbs to error records", () => {
+    clearBreadcrumbs();
+    addBreadcrumb("scopeforge.test.step", { pathname: "/api/x" });
+
+    const record = buildRecord("error", "scopeforge.test.failure", { error: new Error("nope") });
+
+    expect(record.breadcrumbs).toEqual([
+      expect.objectContaining({ event: "scopeforge.test.step", pathname: "/api/x" }),
+    ]);
+    clearBreadcrumbs();
+  });
+});
+
+
+describe("breadcrumbs", () => {
+  it("keeps a bounded trail of JSON-safe diagnostic steps", () => {
+    const priorLimit = process.env.SCOPEFORGE_LOG_BREADCRUMBS;
+    process.env.SCOPEFORGE_LOG_BREADCRUMBS = "2";
+    clearBreadcrumbs();
+
+    addBreadcrumb("scopeforge.test.one");
+    addBreadcrumb("scopeforge.test.two", { detail: { nested: true } });
+    addBreadcrumb("scopeforge.test.three");
+
+    expect(getBreadcrumbs().map((crumb) => crumb.event)).toEqual([
+      "scopeforge.test.two",
+      "scopeforge.test.three",
+    ]);
+
+    clearBreadcrumbs();
+    if (priorLimit === undefined) delete process.env.SCOPEFORGE_LOG_BREADCRUMBS;
+    else process.env.SCOPEFORGE_LOG_BREADCRUMBS = priorLimit;
   });
 });
 

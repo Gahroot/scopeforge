@@ -1,5 +1,6 @@
 import { env as nodeEnv } from "node:process";
 import type { CacheRetention, Provider, StreamOptions, ThinkingLevel } from "@kenkaiiii/gg-ai";
+import type { AgentCredentialsStore, StoredAgentSettings } from "./credentials.node.js";
 
 export const AGENT_PROVIDER_IDS = [
   "anthropic",
@@ -61,6 +62,7 @@ export interface EnabledAgentConfig {
   readonly model: string;
   readonly apiKey: string;
   readonly apiKeyEnvVar: string;
+  readonly accountId?: string;
   readonly baseUrl?: string;
   readonly maxTokens?: number;
   readonly temperature?: number;
@@ -93,6 +95,7 @@ export interface AgentConfigSummary {
   readonly model?: string;
   readonly hasApiKey?: boolean;
   readonly apiKeyEnvVar?: string;
+  readonly accountId?: string;
   readonly baseUrl?: string;
   readonly maxTokens?: number;
   readonly temperature?: number;
@@ -110,6 +113,7 @@ export type AgentStreamDefaults = Pick<
   | "provider"
   | "model"
   | "apiKey"
+  | "accountId"
   | "baseUrl"
   | "maxTokens"
   | "temperature"
@@ -229,6 +233,7 @@ export function agentConfigToStreamDefaults(config: EnabledAgentConfig): AgentSt
     provider: config.provider,
     model: config.model,
     apiKey: config.apiKey,
+    ...(config.accountId === undefined ? {} : { accountId: config.accountId }),
     ...(config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl }),
     ...(config.maxTokens === undefined ? {} : { maxTokens: config.maxTokens }),
     ...(temperature === undefined ? {} : { temperature }),
@@ -259,6 +264,49 @@ function isAnthropicOpus48Model(model: string): boolean {
   return /(^|-)opus-4-8($|-)/.test(normalized);
 }
 
+export async function loadAgentConfigFromStore(store: AgentCredentialsStore): Promise<AgentConfig> {
+  const settings = await store.getSettings();
+  const credentials = await store.resolveCredentials(settings.provider);
+  if (credentials === undefined) return { enabled: false, reason: "not_configured" };
+  return {
+    enabled: true,
+    provider: settings.provider,
+    model: settings.model,
+    apiKey: credentials.accessToken,
+    apiKeyEnvVar: "stored_credentials",
+    ...(settings.provider === "openai" && credentials.accountId !== undefined
+      ? { accountId: credentials.accountId }
+      : {}),
+    ...optionalAgentSettings(settings),
+  };
+}
+
+export async function resolveRuntimeAgentConfig(input: {
+  envConfig: AgentConfig;
+  credentialsStore: AgentCredentialsStore;
+}): Promise<AgentConfig> {
+  if (input.envConfig.enabled || input.envConfig.reason === "disabled_by_env")
+    return input.envConfig;
+  return loadAgentConfigFromStore(input.credentialsStore);
+}
+
+function optionalAgentSettings(
+  settings: StoredAgentSettings,
+): Omit<EnabledAgentConfig, "enabled" | "provider" | "model" | "apiKey" | "apiKeyEnvVar"> {
+  return {
+    ...(settings.baseUrl === undefined ? {} : { baseUrl: settings.baseUrl }),
+    ...(settings.maxTokens === undefined ? {} : { maxTokens: settings.maxTokens }),
+    ...(settings.temperature === undefined ? {} : { temperature: settings.temperature }),
+    ...(settings.topP === undefined ? {} : { topP: settings.topP }),
+    ...(settings.thinking === undefined ? {} : { thinking: settings.thinking }),
+    ...(settings.cacheRetention === undefined ? {} : { cacheRetention: settings.cacheRetention }),
+    ...(settings.webSearch === undefined ? {} : { webSearch: settings.webSearch }),
+    ...(settings.compaction === undefined ? {} : { compaction: settings.compaction }),
+    ...(settings.clearToolUses === undefined ? {} : { clearToolUses: settings.clearToolUses }),
+    ...(settings.promptCacheKey === undefined ? {} : { promptCacheKey: settings.promptCacheKey }),
+  };
+}
+
 export function summarizeAgentConfig(config: AgentConfig): AgentConfigSummary {
   if (!config.enabled) {
     return { enabled: false, reason: config.reason };
@@ -270,6 +318,7 @@ export function summarizeAgentConfig(config: AgentConfig): AgentConfigSummary {
     model: config.model,
     hasApiKey: config.apiKey.length > 0,
     apiKeyEnvVar: config.apiKeyEnvVar,
+    ...(config.accountId === undefined ? {} : { accountId: config.accountId }),
     ...(config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl }),
     ...(config.maxTokens === undefined ? {} : { maxTokens: config.maxTokens }),
     ...(config.temperature === undefined ? {} : { temperature: config.temperature }),
