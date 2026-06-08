@@ -28,6 +28,7 @@ import {
   type AgentResult,
 } from "@kenkaiiii/gg-agent";
 import { logError, logInfo, logWarn } from "../diagnostics/logger.node.js";
+import { isProposalProjectVersionConflictError } from "../project/store.node.js";
 import type { AgentStreamFrame } from "../ui/lib/types.js";
 import type { EnabledAgentConfig } from "./config.node.js";
 import { buildProposalAgent, DEFAULT_MAX_TURNS } from "./proposalAgent.node.js";
@@ -114,6 +115,15 @@ export function eventToFrames(
 }
 
 export function errorFrame(error: unknown): Extract<AgentStreamFrame, { type: "error" }> {
+  if (isProposalProjectVersionConflictError(error)) {
+    return {
+      type: "error",
+      code: error.code,
+      message: error.message,
+      details: projectConflictFrameDetails(error),
+      latestProject: error.latestProject,
+    };
+  }
   if (isAbortError(error)) {
     return { type: "error", code: "aborted", message: "The request was cancelled." };
   }
@@ -144,6 +154,20 @@ export function errorFrame(error: unknown): Extract<AgentStreamFrame, { type: "e
     code: "agent_error",
     message: error instanceof Error ? error.message : String(error),
   };
+}
+
+function projectConflictFrameDetails(error: unknown): readonly string[] {
+  if (!isProposalProjectVersionConflictError(error)) return [];
+  return [
+    `providedBaseVersionId: ${error.providedBaseVersionId}`,
+    `latest.currentVersionId: ${error.latestProject.currentVersionId}`,
+    `latest.currentVersionNumber: ${error.latestProject.currentVersionNumber}`,
+    `latest.updatedAt: ${error.latestProject.updatedAt}`,
+    ...(error.latestProject.updatedBy === undefined
+      ? []
+      : [`latest.updatedBy: ${error.latestProject.updatedBy.displayName}`]),
+    "Fetch the latest project state and retry the agent message against the current version.",
+  ];
 }
 
 function toolLimitFrame(maxToolCalls: number): Extract<AgentStreamFrame, { type: "error" }> {

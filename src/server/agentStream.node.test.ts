@@ -194,6 +194,13 @@ describe("parseAgentMessageBody", () => {
     });
   });
 
+  it("rejects project-backed agent requests without a base version", () => {
+    expect(parseAgentMessageBody({ message: "hello", projectId: "project-1" })).toEqual({
+      ok: false,
+      message: "projectId requires baseVersion.",
+    });
+  });
+
   it("accepts a lightweight collaborator display name", () => {
     const parsed = parseAgentMessageBody({
       message: "draft this",

@@ -19,7 +19,10 @@ import {
   toProposalProjectVersionId,
 } from "../project/state.js";
 import {
+  ProposalProjectVersionConflictError,
   createLocalProposalProjectStore,
+  projectConflictMetadata,
+  type ProposalProjectConflictMetadata,
   type ProposalProjectStoreLoadResult,
 } from "../project/store.node.js";
 import type {
@@ -117,6 +120,9 @@ export function parseAgentMessageBody(body: unknown): ParseResult {
   if (!baseVersion.ok) return { ok: false, message: baseVersion.message };
   if (baseVersion.value !== undefined && projectId === undefined) {
     return { ok: false, message: "baseVersion requires projectId." };
+  }
+  if (projectId !== undefined && baseVersion.value === undefined) {
+    return { ok: false, message: "projectId requires baseVersion." };
   }
   const audience =
     record.audience === "internal" || record.audience === "client" ? record.audience : undefined;
@@ -274,6 +280,7 @@ type ProjectContextResult =
         readonly code: string;
         readonly message: string;
         readonly details?: readonly string[];
+        readonly latestProject?: ProposalProjectConflictMetadata;
       };
     };
 
@@ -345,7 +352,8 @@ async function resolveSelectedProjectContext(
     };
   }
 
-  if (baseVersion !== undefined && baseVersion !== version.versionId) {
+  if (baseVersion !== version.versionId) {
+    const latestProject = projectConflictMetadata(project);
     return {
       ok: false,
       status: 409,
@@ -353,10 +361,13 @@ async function resolveSelectedProjectContext(
         code: "base_version_conflict",
         message: "Project has changed since the provided baseVersion.",
         details: [
-          `provided: ${baseVersion}`,
-          `current: ${version.versionId}`,
+          `providedBaseVersionId: ${baseVersion}`,
+          `latest.currentVersionId: ${latestProject.currentVersionId}`,
+          `latest.currentVersionNumber: ${latestProject.currentVersionNumber}`,
+          `latest.updatedAt: ${latestProject.updatedAt}`,
           "Fetch the latest project state and retry the agent message against the current version.",
         ],
+        latestProject,
       },
     };
   }
@@ -510,9 +521,11 @@ async function persistProjectBackedAgentSession(
     );
   }
   if (latestProject.currentVersionId !== projectContext.currentVersion.versionId) {
-    throw new Error(
-      `Project changed while the agent was responding. Current version is ${latestProject.currentVersionId}; retry against the latest project state.`,
-    );
+    throw new ProposalProjectVersionConflictError({
+      project: latestProject,
+      providedBaseVersionId: projectContext.currentVersion.versionId,
+      message: `Project changed while the agent was responding. Current version is ${latestProject.currentVersionId}; retry against the latest project state.`,
+    });
   }
 
   const update = projectContext.store.update;

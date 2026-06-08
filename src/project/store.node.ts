@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   canonicalJson,
   commitProposalProjectVersion,
@@ -12,8 +13,10 @@ import {
 import type {
   CommitProposalProjectVersionInput,
   CreateProposalProjectInput,
+  ProposalAuthorMetadata,
   ProposalProject,
   ProposalProjectId,
+  ProposalProjectStatus,
   ProposalProjectVersion,
   ProposalProjectVersionId,
 } from "./types.js";
@@ -21,6 +24,9 @@ import type {
 export const DEFAULT_LOCAL_PROJECT_DATA_DIR = ".scopeforge/proposal-projects";
 export const PROJECT_RECORD_FILE_NAME = "project.json";
 export const PROJECT_VERSIONS_DIRECTORY_NAME = "versions";
+const PROJECT_LOCK_FILE_NAME = ".project.lock";
+const PROJECT_LOCK_RETRY_MS = 25;
+const PROJECT_LOCK_TIMEOUT_MS = 5_000;
 
 export type ProposalProjectStoreNow = () => Date | string;
 export type ProposalProjectIdFactory = () => ProposalProjectId;
@@ -52,6 +58,51 @@ export interface ProposalProjectListItem {
   readonly updatedBy?: ProposalProject["updatedBy"];
   readonly currentVersionId: ProposalProjectVersionId;
   readonly versionCount: number;
+}
+
+export interface ProposalProjectConflictMetadata {
+  readonly projectId: ProposalProjectId;
+  readonly title: string;
+  readonly status: ProposalProjectStatus;
+  readonly updatedAt: string;
+  readonly updatedBy?: ProposalAuthorMetadata;
+  readonly currentVersionId: ProposalProjectVersionId;
+  readonly currentVersionNumber: number;
+  readonly versionCount: number;
+}
+
+export class ProposalProjectBaseVersionRequiredError extends Error {
+  override readonly name = "ProposalProjectBaseVersionRequiredError";
+  readonly code = "base_version_required";
+  readonly projectId: ProposalProjectId;
+
+  constructor(projectId: ProposalProjectId) {
+    super(`baseVersionId must identify the latest version for project ${projectId}.`);
+    this.projectId = projectId;
+  }
+}
+
+export class ProposalProjectVersionConflictError extends Error {
+  override readonly name = "ProposalProjectVersionConflictError";
+  readonly code = "base_version_conflict";
+  readonly projectId: ProposalProjectId;
+  readonly providedBaseVersionId: ProposalProjectVersionId;
+  readonly latestProject: ProposalProjectConflictMetadata;
+
+  constructor(input: {
+    readonly project: ProposalProject;
+    readonly providedBaseVersionId: ProposalProjectVersionId;
+    readonly message?: string;
+  }) {
+    const latestProject = projectConflictMetadata(input.project);
+    super(
+      input.message ??
+        `Project has changed since base version ${input.providedBaseVersionId}. Current version is ${latestProject.currentVersionId}.`,
+    );
+    this.projectId = input.project.projectId;
+    this.providedBaseVersionId = input.providedBaseVersionId;
+    this.latestProject = latestProject;
+  }
 }
 
 export type ProposalProjectStoreLoadErrorCode =
@@ -155,27 +206,74 @@ export class LocalProposalProjectStore {
     projectId: ProposalProjectId,
     input: CommitProposalProjectVersionInput,
   ): Promise<ProposalProject | null> {
-    const project = this.projectsById.get(projectId);
-    if (project === undefined) return null;
+    const cachedProject = this.projectsById.get(projectId);
+    if (cachedProject === undefined) return null;
+    if (input.parentVersionId === undefined) {
+      throw new ProposalProjectBaseVersionRequiredError(projectId);
+    }
 
-    const createdAt = input.createdAt ?? toIsoString(this.now());
-    const parentVersionId = input.parentVersionId ?? project.currentVersionId;
-    const versionNumber = nextVersionNumber(project);
-    const versionId =
-      input.versionId ??
-      this.versionIdFactory({
-        projectId,
-        versionNumber,
-        parentVersionId,
+    return this.withProjectLock(projectId, async () => {
+      const persistedProject = await this.readPersistedProject(projectId);
+      const project = persistedProject ?? cachedProject;
+      if (persistedProject !== null) {
+        this.projectsById.set(projectId, cloneProject(persistedProject));
+      }
+      if (project.currentVersionId !== input.parentVersionId) {
+        throw new ProposalProjectVersionConflictError({
+          project,
+          providedBaseVersionId: input.parentVersionId,
+        });
+      }
+
+      const createdAt = input.createdAt ?? toIsoString(this.now());
+      const parentVersionId = input.parentVersionId;
+      const versionNumber = nextVersionNumber(project);
+      const versionId =
+        input.versionId ??
+        this.versionIdFactory({
+          projectId,
+          versionNumber,
+          parentVersionId,
+          createdAt,
+        });
+      const updated = commitProposalProjectVersion(project, {
+        ...input,
         createdAt,
+        parentVersionId,
+        versionId,
       });
-    const updated = commitProposalProjectVersion(project, {
-      ...input,
-      createdAt,
-      parentVersionId,
-      versionId,
+      return this.save(updated);
     });
-    return this.save(updated);
+  }
+
+  private async withProjectLock<TValue>(
+    projectId: ProposalProjectId,
+    run: () => Promise<TValue>,
+  ): Promise<TValue> {
+    const projectDir = projectDirectory(this.dataDir, projectId);
+    await ensureDirectory(projectDir);
+    const release = await acquireProjectLock(join(projectDir, PROJECT_LOCK_FILE_NAME));
+    try {
+      return await run();
+    } finally {
+      await release();
+    }
+  }
+
+  private async readPersistedProject(
+    projectId: ProposalProjectId,
+  ): Promise<ProposalProject | null> {
+    const projectPath = join(projectDirectory(this.dataDir, projectId), PROJECT_RECORD_FILE_NAME);
+    const existing = await readExistingJsonFile(projectPath);
+    if (!existing.exists) return null;
+
+    const result = validateProposalProject(existing.value);
+    if (result.ok) return result.value;
+    throw new Error(
+      `Cannot update proposal project because persisted project JSON is invalid: ${result.errors
+        .map((error) => `${error.path}: ${error.message}`)
+        .join("; ")}`,
+    );
   }
 
   private async writeProject(project: ProposalProject): Promise<void> {
@@ -195,6 +293,28 @@ export function createLocalProposalProjectStore(
   options: LocalProposalProjectStoreOptions = {},
 ): LocalProposalProjectStore {
   return new LocalProposalProjectStore(options);
+}
+
+export function projectConflictMetadata(project: ProposalProject): ProposalProjectConflictMetadata {
+  const currentVersion = project.versions.find(
+    (version) => version.versionId === project.currentVersionId,
+  );
+  return {
+    projectId: project.projectId,
+    title: project.title,
+    status: project.status,
+    updatedAt: project.updatedAt,
+    ...(project.updatedBy === undefined ? {} : { updatedBy: project.updatedBy }),
+    currentVersionId: project.currentVersionId,
+    currentVersionNumber: currentVersion?.versionNumber ?? 0,
+    versionCount: project.versions.length,
+  } satisfies ProposalProjectConflictMetadata;
+}
+
+export function isProposalProjectVersionConflictError(
+  error: unknown,
+): error is ProposalProjectVersionConflictError {
+  return error instanceof ProposalProjectVersionConflictError;
 }
 
 export function projectDirectory(dataDir: string, projectId: ProposalProjectId): string {
@@ -439,6 +559,40 @@ async function writeJsonFileAtomic(path: string, value: unknown): Promise<void> 
   }
 }
 
+type ProjectLockRelease = () => Promise<void>;
+
+async function acquireProjectLock(path: string): Promise<ProjectLockRelease> {
+  const startedAt = Date.now();
+  for (;;) {
+    try {
+      const handle = await open(path, "wx");
+      let initialized = false;
+      try {
+        await handle.writeFile(
+          `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() })}\n`,
+          "utf8",
+        );
+        await handle.sync();
+        initialized = true;
+      } finally {
+        await handle.close().catch(() => undefined);
+        if (!initialized) await rm(path, { force: true }).catch(() => undefined);
+      }
+      await syncDirectory(dirname(path));
+      return async () => {
+        await rm(path, { force: true });
+        await syncDirectory(dirname(path));
+      };
+    } catch (error) {
+      if (!isFileExistsError(error)) throw error;
+      if (Date.now() - startedAt >= PROJECT_LOCK_TIMEOUT_MS) {
+        throw new Error(`Timed out waiting for proposal project update lock: ${path}`);
+      }
+      await sleep(PROJECT_LOCK_RETRY_MS);
+    }
+  }
+}
+
 async function ensureDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true });
 }
@@ -475,6 +629,11 @@ function sameJson(left: unknown, right: unknown): boolean {
 function isMissingFileError(error: unknown): boolean {
   if (typeof error !== "object" || error === null || !("code" in error)) return false;
   return error.code === "ENOENT";
+}
+
+function isFileExistsError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  return error.code === "EEXIST";
 }
 
 function cloneProject(project: ProposalProject): ProposalProject {

@@ -2,6 +2,7 @@
  * Shared client/server contract for the conversational agent UI.
  * Type-only module: imported by both the React client and the Node SSE handler.
  */
+import type { ProposalProjectConflictMetadata } from "../../project/store.node.js";
 import type { ProposalAuthorMetadata } from "../../project/types.js";
 import type { ProposalAudience, ProposalBrand, ProposalDraft } from "../../proposal/types.js";
 
@@ -91,7 +92,13 @@ export type AgentStreamFrame =
     }
   | { readonly type: "snapshot"; readonly snapshot: SessionSnapshot }
   | { readonly type: "done"; readonly totalTurns: number }
-  | { readonly type: "error"; readonly code: string; readonly message: string };
+  | {
+      readonly type: "error";
+      readonly code: string;
+      readonly message: string;
+      readonly details?: readonly string[];
+      readonly latestProject?: ProposalProjectConflictMetadata;
+    };
 
 export interface AgentMessageRequest {
   readonly sessionId?: string;

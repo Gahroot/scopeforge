@@ -108,6 +108,7 @@ describe("local proposal project store", () => {
       const revised = await store.update(created.projectId, {
         sourceOfTruth: retitledSourceOfTruth("Revised AI Portfolio Intelligence Pilot"),
         createdBy: HUMAN_AUTHOR,
+        parentVersionId: initialVersion.versionId,
         label: "Retitle proposal",
         reason: "Client-facing title tightened after review.",
       });
@@ -135,6 +136,61 @@ describe("local proposal project store", () => {
         "Revised AI Portfolio Intelligence Pilot",
       );
     });
+  });
+
+  it("prevents two partners who started from the same version from overwriting each other", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "scopeforge-project-store-partners-"));
+    try {
+      const partnerOne = testStore(dataDir, [INITIAL_TIME, UPDATED_TIME]);
+      const created = await partnerOne.create({
+        sourceOfTruth: validSourceOfTruth(),
+        createdBy: HUMAN_AUTHOR,
+      });
+      const baseVersion = requireCurrentVersion(created);
+
+      const partnerTwo = testStore(dataDir, ["2026-06-07T13:30:00.000Z"]);
+      const load = await partnerTwo.load();
+      expect(load.ok).toBe(true);
+      expect(partnerTwo.get(created.projectId)?.currentVersionId).toBe(baseVersion.versionId);
+
+      const firstSave = await partnerOne.update(created.projectId, {
+        sourceOfTruth: retitledSourceOfTruth("Partner One AI Portfolio Intelligence Pilot"),
+        createdBy: HUMAN_AUTHOR,
+        parentVersionId: baseVersion.versionId,
+        label: "Partner one update",
+      });
+      const firstSavedProject = requireProject(firstSave);
+      const firstSavedVersion = requireCurrentVersion(firstSavedProject);
+
+      expect(firstSavedVersion.parentVersionId).toBe(baseVersion.versionId);
+      expect(firstSavedVersion.sourceOfTruth.draft.details.title).toBe(
+        "Partner One AI Portfolio Intelligence Pilot",
+      );
+
+      await expect(
+        partnerTwo.update(created.projectId, {
+          sourceOfTruth: retitledSourceOfTruth("Partner Two Stale AI Portfolio Intelligence Pilot"),
+          createdBy: HUMAN_AUTHOR,
+          parentVersionId: baseVersion.versionId,
+          label: "Partner two stale update",
+        }),
+      ).rejects.toMatchObject({
+        code: "base_version_conflict",
+        providedBaseVersionId: baseVersion.versionId,
+        latestProject: expect.objectContaining({
+          projectId: created.projectId,
+          currentVersionId: firstSavedVersion.versionId,
+          currentVersionNumber: 2,
+          versionCount: 2,
+        }),
+      });
+
+      expect(
+        requireCurrentVersion(partnerOne.get(created.projectId)).sourceOfTruth.draft.details.title,
+      ).toBe("Partner One AI Portfolio Intelligence Pilot");
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
   });
 
   it("returns null for missing projects", async () => {

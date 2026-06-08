@@ -487,7 +487,12 @@ describe("server API routes", () => {
         {
           method: "POST",
           pathname: `/api/proposal-projects/${projectId}/preview`,
-          body: { audience: "client", iterations: 500, generatedAt: "2026-06-07T00:00:00.000Z" },
+          body: {
+            audience: "client",
+            iterations: 500,
+            generatedAt: "2026-06-07T00:00:00.000Z",
+            baseVersionId: updatedVersionId,
+          },
         },
         { proposalProjectStore: store },
       );
@@ -503,7 +508,12 @@ describe("server API routes", () => {
         {
           method: "POST",
           pathname: `/api/proposal-projects/${projectId}/export-pdf`,
-          body: { audience: "client", iterations: 500, fileName: "../Acme Project.pdf" },
+          body: {
+            audience: "client",
+            iterations: 500,
+            fileName: "../Acme Project.pdf",
+            baseVersionId: updatedVersionId,
+          },
         },
         {
           proposalProjectStore: store,
@@ -832,6 +842,67 @@ describe("server API routes", () => {
     });
   });
 
+  it("returns a conflict when two partners save from the same base version", async () => {
+    await withProjectRouteStore(async (store) => {
+      const createResponse = await handleApiRoute(
+        {
+          method: "POST",
+          pathname: "/api/proposal-projects",
+          body: {
+            draft: projectRouteDraft("Two Partner Operations AI Pilot", 1),
+            brand: BUILT_IN_BRANDS.nolan,
+            clientBrand: BUILT_IN_BRANDS.partners,
+            createdBy: projectRouteAuthor,
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const createdProject = readRecordField(expectJson(createResponse).body, "project");
+      const projectId = readStringField(createdProject, "projectId");
+      const baseVersionId = readStringField(createdProject, "currentVersionId");
+
+      const firstSaveResponse = await handleApiRoute(
+        {
+          method: "PATCH",
+          pathname: `/api/proposal-projects/${projectId}`,
+          body: {
+            baseVersionId,
+            draft: projectRouteDraft("Partner One Operations AI Pilot", 2),
+            displayName: "Partner One",
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const firstSaveJson = expectJson(firstSaveResponse);
+      const firstSavedProject = readRecordField(firstSaveJson.body, "project");
+      const firstSavedVersionId = readStringField(firstSavedProject, "currentVersionId");
+
+      expect(firstSaveJson.status).toBe(200);
+      expect(firstSavedVersionId).not.toBe(baseVersionId);
+
+      const secondSaveResponse = await handleApiRoute(
+        {
+          method: "PATCH",
+          pathname: `/api/proposal-projects/${projectId}`,
+          body: {
+            baseVersionId,
+            draft: projectRouteDraft("Partner Two Stale Operations AI Pilot", 2),
+            displayName: "Partner Two",
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const secondSaveJson = expectJson(secondSaveResponse);
+      const conflictError = readRecordField(secondSaveJson.body, "error");
+      const latestProject = readRecordField(secondSaveJson.body, "latestProject");
+
+      expect(secondSaveJson.status).toBe(409);
+      expect(readStringField(conflictError, "code")).toBe("base_version_conflict");
+      expect(readStringField(latestProject, "currentVersionId")).toBe(firstSavedVersionId);
+      expect(readNumberField(latestProject, "currentVersionNumber")).toBe(2);
+    });
+  });
+
   it("returns typed JSON errors for missing projects and stale base versions", async () => {
     await withProjectRouteStore(async (store) => {
       const missingResponse = await handleApiRoute(
@@ -877,8 +948,13 @@ describe("server API routes", () => {
       const conflictJson = expectJson(conflictResponse);
       const conflictError = readRecordField(conflictJson.body, "error");
 
+      const latestProject = readRecordField(conflictJson.body, "latestProject");
+
       expect(conflictJson.status).toBe(409);
       expect(readStringField(conflictError, "code")).toBe("base_version_conflict");
+      expect(readStringField(latestProject, "currentVersionId")).toBe(
+        readStringField(createdProject, "currentVersionId"),
+      );
     });
   });
 

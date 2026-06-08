@@ -1,7 +1,14 @@
 import { useState } from "react";
 import { Download, Eye, Loader2 } from "lucide-react";
 import { Button } from "../components/ui/button.js";
-import { exportProposalPdf, previewProposal, type ProposalRequestBody } from "../lib/api.js";
+import {
+  exportProposalPdf,
+  exportProposalProjectPdf,
+  previewProposal,
+  previewProposalProject,
+  type ProjectProposalRequestBody,
+  type ProposalRequestBody,
+} from "../lib/api.js";
 import type { SessionSnapshot } from "../lib/types.js";
 import type { ProposalBrand } from "../../proposal/types.js";
 
@@ -29,11 +36,24 @@ export function PreviewExportBar({
       ? { brandId: snapshot.draft.brandId }
       : { brand: vendorBrand }),
   };
+  const projectRequest: {
+    readonly projectId: string;
+    readonly body: ProjectProposalRequestBody;
+  } | null =
+    snapshot.projectId === undefined || snapshot.projectVersionId === undefined
+      ? null
+      : {
+          projectId: snapshot.projectId,
+          body: { ...body, baseVersionId: snapshot.projectVersionId },
+        };
 
   async function handlePreview(): Promise<void> {
     setAction("preview");
     setError(null);
-    const result = await previewProposal(body);
+    const result =
+      projectRequest === null
+        ? await previewProposal(body)
+        : await previewProposalProject(projectRequest.projectId, projectRequest.body);
     setAction(null);
     if (!result.ok) {
       setError(result.error.message);
@@ -50,7 +70,10 @@ export function PreviewExportBar({
   async function handleExport(): Promise<void> {
     setAction("export");
     setError(null);
-    const result = await exportProposalPdf(body);
+    const result =
+      projectRequest === null
+        ? await exportProposalPdf(body)
+        : await exportProposalProjectPdf(projectRequest.projectId, projectRequest.body);
     setAction(null);
     if (!result.ok) {
       setError(result.error.message);

@@ -20,6 +20,9 @@ import {
 } from "../project/state.js";
 import {
   createLocalProposalProjectStore,
+  isProposalProjectVersionConflictError,
+  projectConflictMetadata,
+  type ProposalProjectConflictMetadata,
   type ProposalProjectListItem,
   type ProposalProjectStoreLoadResult,
 } from "../project/store.node.js";
@@ -318,7 +321,12 @@ async function handleProposalProjectRoute(
       return methodNotAllowedResponse("GET", "Proposal project version history is read-only.");
     case "preview":
       if (request.method === "GET" || request.method === "POST") {
-        return previewLatestProposalProjectResponse(route.projectId, request.body, dependencies);
+        return previewLatestProposalProjectResponse(
+          route.projectId,
+          request.body,
+          request.method === "POST",
+          dependencies,
+        );
       }
       return methodNotAllowedResponse(
         "GET, POST",
@@ -447,6 +455,14 @@ async function updateProposalProjectResponse(
         : { currentVersion, sourceOfTruth: currentVersion.sourceOfTruth }),
     });
   } catch (error) {
+    if (isProposalProjectVersionConflictError(error)) {
+      return projectVersionConflictResponse({
+        providedBaseVersionId: error.providedBaseVersionId,
+        latestProject: error.latestProject,
+        retryInstruction:
+          "Fetch the latest project state and retry the update against the current version.",
+      });
+    }
     return projectStoreWriteFailureResponse("project_update_failed", error);
   }
 }
@@ -462,7 +478,7 @@ async function importProposalProjectWebsiteBrandResponse(
   const currentVersion = currentProjectVersionResult(loaded.value.project);
   if (!currentVersion.ok) return currentVersion.response;
 
-  const importInput = resolveProjectBrandImportInput(input, currentVersion.value.versionId);
+  const importInput = resolveProjectBrandImportInput(input, loaded.value.project);
   if (!importInput.ok) return importInput.response;
 
   const extractor = dependencies.extractWebsiteBrand ?? extractWebsiteBrandFromUrl;
@@ -494,7 +510,7 @@ async function importProposalProjectWebsiteBrandResponse(
     const updated = await updateProjectWithImportedBrand(loaded.value.store, projectId, {
       sourceOfTruth,
       createdBy: importInput.value.createdBy,
-      parentVersionId: currentVersion.value.versionId,
+      parentVersionId: importInput.value.baseVersionId,
       source: "import",
       label,
       reason,
@@ -549,12 +565,23 @@ async function updateProjectWithImportedBrand(
     if (updated === null) return routeFailure(proposalProjectNotFoundResponse(projectId));
     return { ok: true, value: updated };
   } catch (error) {
+    if (isProposalProjectVersionConflictError(error)) {
+      return routeFailure(
+        projectVersionConflictResponse({
+          providedBaseVersionId: error.providedBaseVersionId,
+          latestProject: error.latestProject,
+          retryInstruction:
+            "Fetch the latest project state and retry the brand import against the current version.",
+        }),
+      );
+    }
     return routeFailure(projectStoreWriteFailureResponse("project_brand_import_failed", error));
   }
 }
 
 interface ProjectBrandImportInput {
   readonly role: ProposalBrandRole;
+  readonly baseVersionId: ProposalProjectVersionId;
   readonly extract: BrandExtractRouteInput;
   readonly createdBy: ProposalAuthorMetadata;
   readonly createdAt?: string;
@@ -564,7 +591,7 @@ interface ProjectBrandImportInput {
 
 function resolveProjectBrandImportInput(
   input: unknown,
-  currentVersionId: ProposalProjectVersionId,
+  project: ProposalProject,
 ): RouteValueResult<ProjectBrandImportInput> {
   if (!isRecord(input)) {
     return routeFailure(
@@ -579,20 +606,16 @@ function resolveProjectBrandImportInput(
   const role = resolveProjectBrandImportRole(input.role);
   if (!role.ok) return role;
 
-  const baseVersionId = resolveOptionalProjectBrandImportBaseVersionId(input);
+  const baseVersionId = resolveRequiredBaseVersionId(input);
   if (!baseVersionId.ok) return baseVersionId;
-  if (baseVersionId.value !== undefined && baseVersionId.value !== currentVersionId) {
+  if (baseVersionId.value !== project.currentVersionId) {
     return routeFailure(
-      failureResponse(
-        409,
-        "base_version_conflict",
-        "Project has changed since the provided baseVersionId.",
-        [
-          `provided: ${baseVersionId.value}`,
-          `current: ${currentVersionId}`,
+      projectVersionConflictResponse({
+        providedBaseVersionId: baseVersionId.value,
+        latestProject: projectConflictMetadata(project),
+        retryInstruction:
           "Fetch the latest project state and retry the brand import against the current version.",
-        ],
-      ),
+      }),
     );
   }
 
@@ -615,6 +638,7 @@ function resolveProjectBrandImportInput(
     ok: true,
     value: {
       role: role.value,
+      baseVersionId: baseVersionId.value,
       extract: extract.value,
       createdBy: createdBy.value,
       ...(createdAt.value === undefined ? {} : { createdAt: createdAt.value }),
@@ -629,24 +653,6 @@ function resolveProjectBrandImportRole(input: unknown): RouteValueResult<Proposa
   return routeFailure(
     failureResponse(400, "brand_role_invalid", "role must be either vendor or client."),
   );
-}
-
-function resolveOptionalProjectBrandImportBaseVersionId(
-  input: Readonly<Record<string, unknown>>,
-): RouteValueResult<ProposalProjectVersionId | undefined> {
-  const rawBaseVersionId =
-    readOptionalUnknown(input, "baseVersionId") ?? readOptionalUnknown(input, "baseVersion");
-  if (rawBaseVersionId === undefined) return { ok: true, value: undefined };
-  if (typeof rawBaseVersionId !== "string" || rawBaseVersionId.trim().length === 0) {
-    return routeFailure(
-      failureResponse(
-        400,
-        "base_version_invalid",
-        "baseVersionId must be a non-empty string when provided.",
-      ),
-    );
-  }
-  return { ok: true, value: toProposalProjectVersionId(rawBaseVersionId.trim()) };
 }
 
 function buildBrandExtractionProvenance(
@@ -709,10 +715,20 @@ function brandRoleLabel(role: ProposalBrandRole): string {
 async function previewLatestProposalProjectResponse(
   projectId: ProposalProjectId,
   input: unknown,
+  requiresBaseVersion: boolean,
   dependencies: AppRouteDependencies,
 ): Promise<ApiRouteResponse> {
   const loaded = await loadProposalProject(projectId, dependencies);
   if (!loaded.ok) return loaded.response;
+
+  if (requiresBaseVersion) {
+    const baseVersion = resolveRequiredProjectActionBaseVersion(
+      input,
+      loaded.value.project,
+      "preview",
+    );
+    if (!baseVersion.ok) return baseVersion.response;
+  }
 
   const currentVersion = currentProjectVersionResult(loaded.value.project);
   if (!currentVersion.ok) return currentVersion.response;
@@ -753,6 +769,13 @@ async function exportLatestProposalProjectPdfResponse(
 ): Promise<ApiRouteResponse> {
   const loaded = await loadProposalProject(projectId, dependencies);
   if (!loaded.ok) return loaded.response;
+
+  const baseVersion = resolveRequiredProjectActionBaseVersion(
+    input,
+    loaded.value.project,
+    "PDF export",
+  );
+  if (!baseVersion.ok) return baseVersion.response;
 
   const currentVersion = currentProjectVersionResult(loaded.value.project);
   if (!currentVersion.ok) return currentVersion.response;
@@ -940,16 +963,12 @@ function resolveUpdateProposalProjectInput(
 
   if (baseVersionId.value !== project.currentVersionId) {
     return routeFailure(
-      failureResponse(
-        409,
-        "base_version_conflict",
-        "Project has changed since the provided baseVersionId.",
-        [
-          `provided: ${baseVersionId.value}`,
-          `current: ${project.currentVersionId}`,
+      projectVersionConflictResponse({
+        providedBaseVersionId: baseVersionId.value,
+        latestProject: projectConflictMetadata(project),
+        retryInstruction:
           "Fetch the latest project state and retry the update against the current version.",
-        ],
-      ),
+      }),
     );
   }
 
@@ -1377,6 +1396,80 @@ function currentProjectVersionResult(
       [`projectId: ${project.projectId}`, `currentVersionId: ${project.currentVersionId}`],
     ),
   );
+}
+
+function resolveRequiredProjectActionBaseVersion(
+  input: unknown,
+  project: ProposalProject,
+  actionLabel: string,
+): RouteValueResult<ProposalProjectVersionId> {
+  if (!isRecord(input)) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "base_version_required",
+        `${actionLabel} request body must be a JSON object with baseVersionId.`,
+      ),
+    );
+  }
+
+  const baseVersionId = resolveRequiredBaseVersionId(input);
+  if (!baseVersionId.ok) return baseVersionId;
+  if (baseVersionId.value !== project.currentVersionId) {
+    return routeFailure(
+      projectVersionConflictResponse({
+        providedBaseVersionId: baseVersionId.value,
+        latestProject: projectConflictMetadata(project),
+        retryInstruction: `Fetch the latest project state and retry ${actionLabel.toLowerCase()} against the current version.`,
+      }),
+    );
+  }
+  return { ok: true, value: baseVersionId.value };
+}
+
+interface ProjectVersionConflictResponseInput {
+  readonly providedBaseVersionId: ProposalProjectVersionId;
+  readonly latestProject: ProposalProjectConflictMetadata;
+  readonly retryInstruction: string;
+}
+
+function projectVersionConflictResponse(
+  input: ProjectVersionConflictResponseInput,
+): ApiRouteResponse {
+  const message = "Project has changed since the provided baseVersionId.";
+  const details = projectVersionConflictDetails(input);
+  logEvent("debug", "scopeforge.route.failure", {
+    status: 409,
+    code: "base_version_conflict",
+    message,
+    details,
+    latestProject: input.latestProject,
+  });
+  return jsonResponse(409, {
+    ok: false,
+    error: {
+      code: "base_version_conflict",
+      message,
+      details,
+      latestProject: input.latestProject,
+    },
+    latestProject: input.latestProject,
+  });
+}
+
+function projectVersionConflictDetails(
+  input: ProjectVersionConflictResponseInput,
+): readonly string[] {
+  return [
+    `providedBaseVersionId: ${input.providedBaseVersionId}`,
+    `latest.currentVersionId: ${input.latestProject.currentVersionId}`,
+    `latest.currentVersionNumber: ${input.latestProject.currentVersionNumber}`,
+    `latest.updatedAt: ${input.latestProject.updatedAt}`,
+    ...(input.latestProject.updatedBy === undefined
+      ? []
+      : [`latest.updatedBy: ${input.latestProject.updatedBy.displayName}`]),
+    input.retryInstruction,
+  ];
 }
 
 function proposalProjectNotFoundResponse(projectId: ProposalProjectId): ApiRouteResponse {

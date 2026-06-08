@@ -1,3 +1,4 @@
+import type { ProposalProjectConflictMetadata } from "../../project/store.node.js";
 import type {
   ProposalProject,
   ProposalProjectSourceOfTruth,
@@ -28,6 +29,7 @@ export interface ApiError {
   readonly code: string;
   readonly message: string;
   readonly details?: readonly string[];
+  readonly latestProject?: ProposalProjectConflictMetadata;
 }
 
 export type ApiResult<T> =
@@ -56,22 +58,25 @@ async function readJson<T>(response: Response): Promise<ApiResult<T>> {
 }
 
 function extractError(payload: unknown): ApiError {
-  if (
-    typeof payload === "object" &&
-    payload !== null &&
-    "error" in payload &&
-    typeof (payload as { error: unknown }).error === "object"
-  ) {
-    const raw = (payload as { error: Record<string, unknown> }).error;
+  if (isRecord(payload) && isRecord(payload.error)) {
+    const raw = payload.error;
+    const latestProject = raw.latestProject;
     return {
       code: typeof raw.code === "string" ? raw.code : "request_failed",
       message: typeof raw.message === "string" ? raw.message : "Request failed.",
       ...(Array.isArray(raw.details)
         ? { details: raw.details.filter((d): d is string => typeof d === "string") }
         : {}),
+      ...(isRecord(latestProject)
+        ? { latestProject: latestProject as unknown as ProposalProjectConflictMetadata }
+        : {}),
     };
   }
   return { code: "request_failed", message: "Request failed." };
+}
+
+function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
 export async function fetchHealth(signal?: AbortSignal): Promise<ApiResult<HealthResponse>> {
@@ -204,6 +209,22 @@ export async function previewProposal(
   return postJson<PreviewResponse>("/api/proposals/preview", body, signal);
 }
 
+export interface ProjectProposalRequestBody extends ProposalRequestBody {
+  readonly baseVersionId: string;
+}
+
+export async function previewProposalProject(
+  projectId: string,
+  body: ProjectProposalRequestBody,
+  signal?: AbortSignal,
+): Promise<ApiResult<PreviewResponse>> {
+  return postJson<PreviewResponse>(
+    `/api/proposal-projects/${encodeURIComponent(projectId)}/preview`,
+    body,
+    signal,
+  );
+}
+
 export interface ExportPdfResult {
   readonly bytes: Blob;
   readonly fileName: string;
@@ -213,7 +234,27 @@ export async function exportProposalPdf(
   body: ProposalRequestBody,
   signal?: AbortSignal,
 ): Promise<ApiResult<ExportPdfResult>> {
-  const response = await fetch("/api/proposals/export-pdf", {
+  return exportPdfFromPath("/api/proposals/export-pdf", body, signal);
+}
+
+export async function exportProposalProjectPdf(
+  projectId: string,
+  body: ProjectProposalRequestBody,
+  signal?: AbortSignal,
+): Promise<ApiResult<ExportPdfResult>> {
+  return exportPdfFromPath(
+    `/api/proposal-projects/${encodeURIComponent(projectId)}/export-pdf`,
+    body,
+    signal,
+  );
+}
+
+async function exportPdfFromPath(
+  path: string,
+  body: ProposalRequestBody | ProjectProposalRequestBody,
+  signal?: AbortSignal,
+): Promise<ApiResult<ExportPdfResult>> {
+  const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
