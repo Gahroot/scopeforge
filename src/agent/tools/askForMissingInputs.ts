@@ -6,12 +6,18 @@ import { defineTool, snapshotResult, type ResolvedToolDeps } from "./shared.js";
 /** Maps a validation-error path prefix to a plain-language question for the buyer's consultant. */
 const PATH_QUESTIONS: ReadonlyArray<readonly [prefix: string, question: string]> = [
   ["preparedFor.companyName", "Who is this proposal for — the client company name?"],
-  ["project.cost.workstreams", "What needs to be built? List the workstreams with rough hour estimates."],
+  [
+    "project.cost.workstreams",
+    "What needs to be built? List the workstreams with rough hour estimates.",
+  ],
   [
     "project.value",
     "Where does the value come from? Share role time savings (role, headcount, hours/week, loaded rate) and/or workflow savings.",
   ],
-  ["project.pricing", "What price are you anchoring to? Provide at least one priced tier or phase."],
+  [
+    "project.pricing",
+    "What price are you anchoring to? Provide at least one priced tier or phase.",
+  ],
   ["details.title", "What should the proposal be titled?"],
   ["details.recommendation", "In one sentence, what do you recommend the client do?"],
   ["details.executiveSummary", "What are the 2–3 key points for the executive summary?"],

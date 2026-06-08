@@ -22,4 +22,20 @@ describe("buildAgentMessageRequest", () => {
       clientBrand: BUILT_IN_BRANDS.partners,
     });
   });
+
+  it("starts a project-backed new chat without replaying the old session or stale base version", () => {
+    expect(
+      buildAgentMessageRequest("Continue from the latest saved draft", "session-old", {
+        projectId: "project-1",
+        baseVersion: "version-stale",
+        newChatFromLatestProject: true,
+        displayName: "Riley Chen",
+      }),
+    ).toEqual({
+      message: "Continue from the latest saved draft",
+      projectId: "project-1",
+      newChatFromLatestProject: true,
+      displayName: "Riley Chen",
+    });
+  });
 });

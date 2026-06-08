@@ -12,7 +12,7 @@ export function MessageList({ messages }: MessageListProps): JSX.Element {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages]);
+  });
 
   return (
     <ScrollArea className="h-full">

@@ -58,6 +58,7 @@ interface AgentMessageInput {
   readonly message: string;
   readonly projectId?: ProposalProjectId;
   readonly baseVersion?: ProposalProjectVersionId;
+  readonly newChatFromLatestProject?: boolean;
   readonly brandId?: string;
   readonly audience?: ProposalAudience;
   readonly author?: ProposalAuthorMetadata;
@@ -116,12 +117,16 @@ export function parseAgentMessageBody(body: unknown): ParseResult {
     typeof record.projectId === "string" && record.projectId.trim().length > 0
       ? toProposalProjectId(record.projectId.trim())
       : undefined;
+  const newChatFromLatestProject = record.newChatFromLatestProject === true;
   const baseVersion = parseOptionalBaseVersion(record);
   if (!baseVersion.ok) return { ok: false, message: baseVersion.message };
+  if (newChatFromLatestProject && projectId === undefined) {
+    return { ok: false, message: "newChatFromLatestProject requires projectId." };
+  }
   if (baseVersion.value !== undefined && projectId === undefined) {
     return { ok: false, message: "baseVersion requires projectId." };
   }
-  if (projectId !== undefined && baseVersion.value === undefined) {
+  if (projectId !== undefined && baseVersion.value === undefined && !newChatFromLatestProject) {
     return { ok: false, message: "projectId requires baseVersion." };
   }
   const audience =
@@ -134,9 +139,14 @@ export function parseAgentMessageBody(body: unknown): ParseResult {
     ok: true,
     value: {
       message: message.trim(),
-      ...(typeof record.sessionId === "string" ? { sessionId: record.sessionId } : {}),
+      ...(!newChatFromLatestProject && typeof record.sessionId === "string"
+        ? { sessionId: record.sessionId }
+        : {}),
       ...(projectId === undefined ? {} : { projectId }),
-      ...(baseVersion.value === undefined ? {} : { baseVersion: baseVersion.value }),
+      ...(baseVersion.value === undefined || newChatFromLatestProject
+        ? {}
+        : { baseVersion: baseVersion.value }),
+      ...(newChatFromLatestProject ? { newChatFromLatestProject: true } : {}),
       ...(typeof record.brandId === "string" ? { brandId: record.brandId } : {}),
       ...(audience === undefined ? {} : { audience }),
       ...(author.value === undefined ? {} : { author: author.value }),
@@ -284,15 +294,21 @@ type ProjectContextResult =
       };
     };
 
+interface ResolveSelectedProjectContextOptions {
+  readonly proposalProjectStore?: AgentProposalProjectStore;
+  readonly acceptLatestProject: boolean;
+  readonly requireWritableStore: boolean;
+}
+
 async function resolveSelectedProjectContext(
   projectId: ProposalProjectId | undefined,
   baseVersion: ProposalProjectVersionId | undefined,
-  options: AgentStreamHandlerOptions,
+  options: ResolveSelectedProjectContextOptions,
 ): Promise<ProjectContextResult> {
   if (projectId === undefined) return { ok: true };
 
   const store = options.proposalProjectStore ?? createLocalProposalProjectStore();
-  if (store.update === undefined) {
+  if (options.requireWritableStore && store.update === undefined) {
     return {
       ok: false,
       status: 503,
@@ -352,7 +368,7 @@ async function resolveSelectedProjectContext(
     };
   }
 
-  if (baseVersion !== version.versionId) {
+  if (!options.acceptLatestProject && baseVersion !== version.versionId) {
     const latestProject = projectConflictMetadata(project);
     return {
       ok: false,
@@ -420,7 +436,13 @@ export async function handleAgentMessages(
   const resolvedProject = await resolveSelectedProjectContext(
     parsed.value.projectId,
     parsed.value.baseVersion,
-    options,
+    {
+      ...(options.proposalProjectStore === undefined
+        ? {}
+        : { proposalProjectStore: options.proposalProjectStore }),
+      acceptLatestProject: parsed.value.newChatFromLatestProject === true,
+      requireWritableStore: true,
+    },
   );
   if (!resolvedProject.ok) {
     response.writeHead(resolvedProject.status, {
@@ -440,20 +462,28 @@ export async function handleAgentMessages(
     ...(projectContext === undefined ? {} : { projectContext }),
   });
   if (projectContext !== undefined) {
-    applyProjectContextToSession(session, projectContext);
-    session.messages = [];
+    const shouldHydrateFromProject =
+      parsed.value.newChatFromLatestProject === true ||
+      session.projectId !== projectContext.projectId ||
+      session.projectVersionId !== projectContext.versionId;
+    if (shouldHydrateFromProject) {
+      applyProjectContextToSession(session, projectContext);
+      session.messages = [];
+    }
   }
   if (parsed.value.brandId !== undefined) {
     session.brandId = resolveSessionBrandId(parsed.value.brandId);
   }
   if (parsed.value.audience !== undefined) session.audience = parsed.value.audience;
   if (parsed.value.author !== undefined) session.createdBy = parsed.value.author;
-  if (parsed.value.vendorBrand !== undefined) session.vendorBrand = parsed.value.vendorBrand;
-  if (
-    parsed.value.clientBrand !== undefined &&
-    parsed.value.clientBrand.id !== session.clientBrand?.id
-  ) {
-    applyClientBrandToSession(session, parsed.value.clientBrand);
+  if (projectContext === undefined) {
+    if (parsed.value.vendorBrand !== undefined) session.vendorBrand = parsed.value.vendorBrand;
+    if (
+      parsed.value.clientBrand !== undefined &&
+      parsed.value.clientBrand.id !== session.clientBrand?.id
+    ) {
+      applyClientBrandToSession(session, parsed.value.clientBrand);
+    }
   }
 
   const abort = new AbortController();
@@ -476,10 +506,7 @@ export async function handleAgentMessages(
 
   const contextNote = buildContextNote(session);
   const projectPersistenceContext = resolvedProject.value;
-  const priorMessages =
-    projectPersistenceContext === undefined && session.messages.length > 0
-      ? session.messages
-      : undefined;
+  const priorMessages = session.messages.length > 0 ? session.messages : undefined;
   const persistProjectVersion =
     projectPersistenceContext === undefined
       ? undefined

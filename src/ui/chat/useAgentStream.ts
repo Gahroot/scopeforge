@@ -27,6 +27,7 @@ export type AgentSendOptions = Pick<
   AgentMessageRequest,
   | "projectId"
   | "baseVersion"
+  | "newChatFromLatestProject"
   | "brandId"
   | "audience"
   | "author"
@@ -42,6 +43,7 @@ export interface AgentStreamApi {
   readonly error: string | null;
   readonly projectConflict: ProjectConflictNotice | null;
   send(message: string, options?: AgentSendOptions): Promise<void>;
+  startNewChatFromLatestProject(): void;
   stop(): void;
   reset(): void;
 }
@@ -51,11 +53,15 @@ export function buildAgentMessageRequest(
   sessionId: string | null,
   options?: AgentSendOptions,
 ): AgentMessageRequest {
+  const fromLatestProject = options?.newChatFromLatestProject === true;
   return {
     message,
-    ...(sessionId === null ? {} : { sessionId }),
+    ...(sessionId === null || fromLatestProject ? {} : { sessionId }),
     ...(options?.projectId === undefined ? {} : { projectId: options.projectId }),
-    ...(options?.baseVersion === undefined ? {} : { baseVersion: options.baseVersion }),
+    ...(options?.baseVersion === undefined || fromLatestProject
+      ? {}
+      : { baseVersion: options.baseVersion }),
+    ...(fromLatestProject ? { newChatFromLatestProject: true } : {}),
     ...(options?.brandId === undefined ? {} : { brandId: options.brandId }),
     ...(options?.audience === undefined ? {} : { audience: options.audience }),
     ...(options?.author === undefined ? {} : { author: options.author }),
@@ -77,6 +83,7 @@ export function useAgentStream(): AgentStreamApi {
   const [projectConflict, setProjectConflict] = useState<ProjectConflictNotice | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const newChatFromLatestProjectRef = useRef(false);
 
   const patchAssistant = useCallback((id: string, update: (message: ChatMessage) => void): void => {
     setMessages((prev) =>
@@ -104,7 +111,16 @@ export function useAgentStream(): AgentStreamApi {
 
       const controller = new AbortController();
       abortRef.current = controller;
-      const requestBody = buildAgentMessageRequest(text, sessionIdRef.current, options);
+      const fromLatestProject = newChatFromLatestProjectRef.current;
+      const requestOptions: AgentSendOptions = {
+        ...(options ?? {}),
+        ...(fromLatestProject ? { newChatFromLatestProject: true } : {}),
+      };
+      const requestBody = buildAgentMessageRequest(
+        text,
+        fromLatestProject ? null : sessionIdRef.current,
+        requestOptions,
+      );
 
       try {
         const response = await fetch("/api/agent/messages", {
@@ -160,12 +176,25 @@ export function useAgentStream(): AgentStreamApi {
         patchAssistant(assistantId, (m) => {
           m.streaming = false;
         });
+        newChatFromLatestProjectRef.current = false;
         setStatus("idle");
         abortRef.current = null;
       }
     },
     [patchAssistant, status],
   );
+
+  const startNewChatFromLatestProject = useCallback((): void => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    sessionIdRef.current = null;
+    newChatFromLatestProjectRef.current = true;
+    setMessages([]);
+    setStatus("idle");
+    setSnapshot(null);
+    setError(null);
+    setProjectConflict(null);
+  }, []);
 
   const stop = useCallback((): void => {
     abortRef.current?.abort();
@@ -177,6 +206,7 @@ export function useAgentStream(): AgentStreamApi {
     abortRef.current?.abort();
     abortRef.current = null;
     sessionIdRef.current = null;
+    newChatFromLatestProjectRef.current = false;
     setMessages([]);
     setStatus("idle");
     setSnapshot(null);
@@ -184,7 +214,17 @@ export function useAgentStream(): AgentStreamApi {
     setProjectConflict(null);
   }, []);
 
-  return { messages, status, snapshot, error, projectConflict, send, stop, reset };
+  return {
+    messages,
+    status,
+    snapshot,
+    error,
+    projectConflict,
+    send,
+    startNewChatFromLatestProject,
+    stop,
+    reset,
+  };
 }
 
 interface ApplyContext {

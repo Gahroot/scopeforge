@@ -111,7 +111,9 @@ function savingsTable(realizedTime: Range, workflows: Range, yearOne: Range): st
       </figure>`;
 }
 
-function savingsRamp(ramp: readonly { year: number; low: number; high: number; label?: string }[]): string {
+function savingsRamp(
+  ramp: readonly { year: number; low: number; high: number; label?: string }[],
+): string {
   if (ramp.length === 0) return "";
   const maxHigh = ramp.reduce((max, year) => Math.max(max, year.high), 0);
   const bars = ramp
@@ -168,12 +170,15 @@ function renderDeliverables(sections: readonly NarrativeSection[]): string {
 
 function renderInvestment(
   tiers: readonly Tier[],
-  phases: readonly { name: string; status: string; deliverables: readonly string[]; note?: string }[],
+  phases: readonly {
+    name: string;
+    status: string;
+    deliverables: readonly string[];
+    note?: string;
+  }[],
   terms: Proposal["project"]["pricing"]["terms"],
 ): string {
-  const cards = tiers
-    .map((tier, index) => investmentCard(tier, phases[index]))
-    .join("\n        ");
+  const cards = tiers.map((tier, index) => investmentCard(tier, phases[index])).join("\n        ");
   return `    <section class="page">
       <header class="section-head">
         <p class="eyebrow">Investment</p>
@@ -188,7 +193,9 @@ function renderInvestment(
 
 function investmentCard(
   tier: Tier,
-  phase: { name: string; status: string; deliverables: readonly string[]; note?: string } | undefined,
+  phase:
+    | { name: string; status: string; deliverables: readonly string[]; note?: string }
+    | undefined,
 ): string {
   const deliverables = phase?.deliverables ?? [];
   const statusLabel = phase ? phase.status : tier.price === null ? "open" : "fixed";
@@ -228,7 +235,9 @@ function priceChain(tier: Tier): string {
 function termsBlock(terms: NonNullable<Proposal["project"]["pricing"]["terms"]>): string {
   const items: string[] = [];
   if (terms.supportIncludedDays !== undefined) {
-    items.push(`${escapeHtml(String(terms.supportIncludedDays))} days of post-launch support included`);
+    items.push(
+      `${escapeHtml(String(terms.supportIncludedDays))} days of post-launch support included`,
+    );
   }
   if (terms.supportMonthly !== undefined) {
     items.push(`Continuous support retainer ${escapeHtml(formatMoney(terms.supportMonthly))}/mo`);

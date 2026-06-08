@@ -105,6 +105,8 @@ export interface AgentMessageRequest {
   readonly message: string;
   readonly projectId?: string;
   readonly baseVersion?: string;
+  /** Start a disposable chat from the newest saved project state instead of replaying this session. */
+  readonly newChatFromLatestProject?: boolean;
   readonly brandId?: string;
   readonly audience?: ProposalAudience;
   /** Optional collaborator identity; string author/displayName values are accepted by the local API. */

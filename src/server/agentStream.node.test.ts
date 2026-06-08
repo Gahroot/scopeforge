@@ -201,6 +201,32 @@ describe("parseAgentMessageBody", () => {
     });
   });
 
+  it("accepts a new chat from the latest saved project without a base version", () => {
+    expect(
+      parseAgentMessageBody({
+        message: "continue from latest",
+        projectId: "project-1",
+        baseVersion: "version-stale",
+        sessionId: "old-chat",
+        newChatFromLatestProject: true,
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        message: "continue from latest",
+        projectId: "project-1",
+        newChatFromLatestProject: true,
+      },
+    });
+  });
+
+  it("rejects a new chat from latest project without a selected project", () => {
+    expect(parseAgentMessageBody({ message: "hello", newChatFromLatestProject: true })).toEqual({
+      ok: false,
+      message: "newChatFromLatestProject requires projectId.",
+    });
+  });
+
   it("accepts a lightweight collaborator display name", () => {
     const parsed = parseAgentMessageBody({
       message: "draft this",

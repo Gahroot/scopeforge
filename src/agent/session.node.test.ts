@@ -20,6 +20,18 @@ function newSession(): AgentSession {
   return createSessionStore({ idFactory: () => "test-session" }).create();
 }
 
+function projectContextDraft() {
+  return {
+    ...createStarterDraft(),
+    preparedFor: {
+      companyName: BUILT_IN_BRANDS.partners.name,
+      website: BUILT_IN_BRANDS.partners.website,
+      logoText: BUILT_IN_BRANDS.partners.logoText,
+      accentColor: BUILT_IN_BRANDS.partners.colors.accent,
+    },
+  };
+}
+
 describe("createSessionStore", () => {
   it("uses a safe local collaborator label when no author is provided", () => {
     const session = newSession();
@@ -31,15 +43,7 @@ describe("createSessionStore", () => {
   });
 
   it("starts fresh sessions from the selected project brand profiles", () => {
-    const draft = {
-      ...createStarterDraft(),
-      preparedFor: {
-        companyName: BUILT_IN_BRANDS.partners.name,
-        website: BUILT_IN_BRANDS.partners.website,
-        logoText: BUILT_IN_BRANDS.partners.logoText,
-        accentColor: BUILT_IN_BRANDS.partners.colors.accent,
-      },
-    };
+    const draft = projectContextDraft();
     const session = createSessionStore({ idFactory: () => "project-session" }).create({
       projectContext: {
         projectId: toProposalProjectId("project-brand-context"),
@@ -65,6 +69,36 @@ describe("createSessionStore", () => {
       vendorBrand: BUILT_IN_BRANDS.nolan,
       clientBrand: BUILT_IN_BRANDS.partners,
     });
+  });
+
+  it("starts separate chats from the same latest project version without sharing messages", () => {
+    const ids = ["project-chat-a", "project-chat-b"];
+    const draft = projectContextDraft();
+    const projectContext = {
+      projectId: toProposalProjectId("project-latest-context"),
+      versionId: toProposalProjectVersionId("version-latest-context"),
+      sourceOfTruth: {
+        draft,
+        vendorBrand: BUILT_IN_BRANDS.nolan,
+        clientBrand: BUILT_IN_BRANDS.partners,
+      },
+    };
+    const sessions = createSessionStore({ idFactory: () => ids.shift() ?? "project-chat-extra" });
+    const firstChat = sessions.create({ projectContext });
+    firstChat.messages = [
+      { role: "user", content: "Use the old narrow pilot." },
+      { role: "assistant", content: "Old chat context captured." },
+    ];
+
+    const secondChat = sessions.create({ projectContext });
+
+    expect(firstChat.projectVersionId).toBe("version-latest-context");
+    expect(secondChat.projectVersionId).toBe("version-latest-context");
+    expect(secondChat.messages).toEqual([]);
+    expect(firstChat.messages).toHaveLength(2);
+    expect(secondChat.store.current.details.title).toBe(draft.details.title);
+    expect(secondChat.vendorBrand).toEqual(BUILT_IN_BRANDS.nolan);
+    expect(secondChat.clientBrand).toEqual(BUILT_IN_BRANDS.partners);
   });
 
   it("records a provided collaborator as the session author", () => {
