@@ -22,26 +22,45 @@ export interface ChatMessage {
   error?: string;
 }
 
+export type AgentSendOptions = Pick<
+  AgentMessageRequest,
+  | "projectId"
+  | "baseVersion"
+  | "brandId"
+  | "audience"
+  | "author"
+  | "displayName"
+  | "vendorBrand"
+  | "clientBrand"
+>;
+
 export interface AgentStreamApi {
   readonly messages: readonly ChatMessage[];
   readonly status: AgentStatus;
   readonly snapshot: SessionSnapshot | null;
   readonly error: string | null;
-  send(
-    message: string,
-    options?: Pick<
-      AgentMessageRequest,
-      | "projectId"
-      | "baseVersion"
-      | "brandId"
-      | "audience"
-      | "author"
-      | "displayName"
-      | "vendorBrand"
-      | "clientBrand"
-    >,
-  ): Promise<void>;
+  send(message: string, options?: AgentSendOptions): Promise<void>;
   stop(): void;
+  reset(): void;
+}
+
+export function buildAgentMessageRequest(
+  message: string,
+  sessionId: string | null,
+  options?: AgentSendOptions,
+): AgentMessageRequest {
+  return {
+    message,
+    ...(sessionId === null ? {} : { sessionId }),
+    ...(options?.projectId === undefined ? {} : { projectId: options.projectId }),
+    ...(options?.baseVersion === undefined ? {} : { baseVersion: options.baseVersion }),
+    ...(options?.brandId === undefined ? {} : { brandId: options.brandId }),
+    ...(options?.audience === undefined ? {} : { audience: options.audience }),
+    ...(options?.author === undefined ? {} : { author: options.author }),
+    ...(options?.displayName === undefined ? {} : { displayName: options.displayName }),
+    ...(options?.vendorBrand === undefined ? {} : { vendorBrand: options.vendorBrand }),
+    ...(options?.clientBrand === undefined ? {} : { clientBrand: options.clientBrand }),
+  } satisfies AgentMessageRequest;
 }
 
 function makeId(): string {
@@ -68,20 +87,7 @@ export function useAgentStream(): AgentStreamApi {
   }, []);
 
   const send = useCallback(
-    async (
-      text: string,
-      options?: Pick<
-        AgentMessageRequest,
-        | "projectId"
-        | "baseVersion"
-        | "brandId"
-        | "audience"
-        | "author"
-        | "displayName"
-        | "vendorBrand"
-        | "clientBrand"
-      >,
-    ): Promise<void> => {
+    async (text: string, options?: AgentSendOptions): Promise<void> => {
       if (status !== "idle") return;
       setError(null);
       const assistantId = makeId();
@@ -94,18 +100,7 @@ export function useAgentStream(): AgentStreamApi {
 
       const controller = new AbortController();
       abortRef.current = controller;
-      const requestBody: AgentMessageRequest = {
-        message: text,
-        ...(sessionIdRef.current === null ? {} : { sessionId: sessionIdRef.current }),
-        ...(options?.projectId === undefined ? {} : { projectId: options.projectId }),
-        ...(options?.baseVersion === undefined ? {} : { baseVersion: options.baseVersion }),
-        ...(options?.brandId === undefined ? {} : { brandId: options.brandId }),
-        ...(options?.audience === undefined ? {} : { audience: options.audience }),
-        ...(options?.author === undefined ? {} : { author: options.author }),
-        ...(options?.displayName === undefined ? {} : { displayName: options.displayName }),
-        ...(options?.vendorBrand === undefined ? {} : { vendorBrand: options.vendorBrand }),
-        ...(options?.clientBrand === undefined ? {} : { clientBrand: options.clientBrand }),
-      };
+      const requestBody = buildAgentMessageRequest(text, sessionIdRef.current, options);
 
       try {
         const response = await fetch("/api/agent/messages", {
@@ -165,7 +160,17 @@ export function useAgentStream(): AgentStreamApi {
     setStatus("idle");
   }, []);
 
-  return { messages, status, snapshot, error, send, stop };
+  const reset = useCallback((): void => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    sessionIdRef.current = null;
+    setMessages([]);
+    setStatus("idle");
+    setSnapshot(null);
+    setError(null);
+  }, []);
+
+  return { messages, status, snapshot, error, send, stop, reset };
 }
 
 interface ApplyContext {

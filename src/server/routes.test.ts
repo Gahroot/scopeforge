@@ -389,6 +389,40 @@ describe("server API routes", () => {
     );
   });
 
+  it("creates a starter proposal project from a simple UI create request", async () => {
+    await withProjectRouteStore(async (store) => {
+      const response = await handleApiRoute(
+        {
+          method: "POST",
+          pathname: "/api/proposal-projects",
+          body: {
+            title: "New client proposal",
+            displayName: "Dana Lee",
+          },
+        },
+        { proposalProjectStore: store },
+      );
+      const json = expectJson(response);
+      const project = readRecordField(json.body, "project");
+      const currentVersion = readRecordField(json.body, "currentVersion");
+      const sourceOfTruth = readRecordField(json.body, "sourceOfTruth");
+      const draft = readRecordField(sourceOfTruth, "draft");
+      const details = readRecordField(draft, "details");
+      const preparedFor = readRecordField(draft, "preparedFor");
+      const vendorBrand = readRecordField(sourceOfTruth, "vendorBrand");
+      const createdBy = readRecordField(project, "createdBy");
+      const versionCreatedBy = readRecordField(currentVersion, "createdBy");
+
+      expect(json.status).toBe(201);
+      expect(readStringField(project, "title")).toBe("New client proposal");
+      expect(readStringField(details, "title")).toBe("New client proposal");
+      expect(readStringField(preparedFor, "companyName")).toBe("Prospective client");
+      expect(readStringField(vendorBrand, "id")).toBe("nolan");
+      expect(readStringField(createdBy, "displayName")).toBe("Dana Lee");
+      expect(versionCreatedBy).toEqual(createdBy);
+    });
+  });
+
   it("creates, lists, reads, updates, previews, histories, and exports local proposal projects", async () => {
     await withProjectRouteStore(async (store) => {
       const initialDraft = projectRouteDraft("Operations AI Pilot", 1);
@@ -494,6 +528,7 @@ describe("server API routes", () => {
             iterations: 500,
             generatedAt: "2026-06-07T00:00:00.000Z",
             baseVersionId: updatedVersionId,
+            displayName: "Preview Collaborator",
           },
         },
         { proposalProjectStore: store },
@@ -509,7 +544,9 @@ describe("server API routes", () => {
 
       const previewArtifact = readRecordField(previewJson.body, "artifact");
       const previewRender = readRecordField(previewArtifact, "render");
+      const previewCreatedBy = readRecordField(previewArtifact, "createdBy");
       expect(readStringField(previewArtifact, "kind")).toBe("proposal-preview");
+      expect(readStringField(previewCreatedBy, "displayName")).toBe("Preview Collaborator");
       expect(readStringField(previewArtifact, "sourceVersionId")).toBe(updatedVersionId);
       expect(readStringField(previewArtifact, "uri")).toContain(
         `artifacts/000002-${updatedVersionId}/`,
@@ -523,9 +560,7 @@ describe("server API routes", () => {
         projectDirectory(store.dataDir, toProposalProjectId(projectId)),
         readStringField(previewArtifact, "uri"),
       );
-      expect(await readFile(previewArtifactPath, "utf8")).toContain(
-        "Updated Operations AI Pilot",
-      );
+      expect(await readFile(previewArtifactPath, "utf8")).toContain("Updated Operations AI Pilot");
 
       const pdfBytes = Buffer.from("%PDF-project-route-test");
       const exportResponse = await handleApiRoute(
@@ -537,6 +572,7 @@ describe("server API routes", () => {
             iterations: 500,
             fileName: "../Acme Project.pdf",
             baseVersionId: updatedVersionId,
+            displayName: "Export Collaborator",
           },
         },
         {
@@ -561,8 +597,12 @@ describe("server API routes", () => {
       const htmlArtifact = findArtifactByKind(artifacts, "proposal-html");
       const pdfArtifact = findArtifactByKind(artifacts, "proposal-pdf");
       const pdfRender = readRecordField(pdfArtifact, "render");
+      const htmlCreatedBy = readRecordField(htmlArtifact, "createdBy");
+      const pdfCreatedBy = readRecordField(pdfArtifact, "createdBy");
 
       expect(artifacts).toHaveLength(3);
+      expect(readStringField(htmlCreatedBy, "displayName")).toBe("Export Collaborator");
+      expect(readStringField(pdfCreatedBy, "displayName")).toBe("Export Collaborator");
       expect(readStringField(htmlArtifact, "sourceVersionId")).toBe(updatedVersionId);
       expect(readStringField(pdfArtifact, "sourceVersionId")).toBe(updatedVersionId);
       expect(readStringField(pdfRender, "renderer")).toBe("scopeforge.proposalPdf");
@@ -570,10 +610,12 @@ describe("server API routes", () => {
       expect(readNumberField(pdfArtifact, "bytes")).toBe(pdfBytes.byteLength);
 
       const projectDir = projectDirectory(store.dataDir, toProposalProjectId(projectId));
-      expect(await readFile(join(projectDir, readStringField(htmlArtifact, "uri")), "utf8")).toContain(
-        "Updated Operations AI Pilot",
+      expect(
+        await readFile(join(projectDir, readStringField(htmlArtifact, "uri")), "utf8"),
+      ).toContain("Updated Operations AI Pilot");
+      expect(await readFile(join(projectDir, readStringField(pdfArtifact, "uri")))).toEqual(
+        pdfBytes,
       );
-      expect(await readFile(join(projectDir, readStringField(pdfArtifact, "uri")))).toEqual(pdfBytes);
     });
   });
 

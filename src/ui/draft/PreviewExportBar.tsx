@@ -16,6 +16,7 @@ export interface PreviewExportBarProps {
   readonly snapshot: SessionSnapshot;
   readonly disabled: boolean;
   readonly vendorBrand?: ProposalBrand | null;
+  readonly displayName: string | null;
 }
 
 type Action = "preview" | "export" | null;
@@ -24,6 +25,7 @@ export function PreviewExportBar({
   snapshot,
   disabled,
   vendorBrand,
+  displayName,
 }: PreviewExportBarProps): JSX.Element {
   const [action, setAction] = useState<Action>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +34,7 @@ export function PreviewExportBar({
   const body: ProposalRequestBody = {
     draft: snapshot.fullDraft,
     audience: snapshot.draft.audience,
+    ...(displayName === null ? {} : { displayName }),
     ...(vendorBrand === undefined || vendorBrand === null
       ? { brandId: snapshot.draft.brandId }
       : { brand: vendorBrand }),

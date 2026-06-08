@@ -13,6 +13,7 @@ export interface DraftPanelProps {
   readonly brands: readonly ProposalBrand[];
   readonly busy: boolean;
   readonly vendorBrand: ProposalBrand | null;
+  readonly displayName: string | null;
 }
 
 function formatMoney(value: number | null): string {
@@ -24,7 +25,13 @@ function formatMoney(value: number | null): string {
   }).format(Math.round(value));
 }
 
-export function DraftPanel({ snapshot, brands, busy, vendorBrand }: DraftPanelProps): JSX.Element {
+export function DraftPanel({
+  snapshot,
+  brands,
+  busy,
+  vendorBrand,
+  displayName,
+}: DraftPanelProps): JSX.Element {
   if (snapshot === null) {
     return (
       <aside className="hidden min-h-0 flex-col bg-muted/30 lg:flex">
@@ -111,7 +118,12 @@ export function DraftPanel({ snapshot, brands, busy, vendorBrand }: DraftPanelPr
           )}
 
           <GuardrailList validation={validation} />
-          <PreviewExportBar snapshot={snapshot} disabled={busy} vendorBrand={vendorBrand} />
+          <PreviewExportBar
+            snapshot={snapshot}
+            disabled={busy}
+            vendorBrand={vendorBrand}
+            displayName={displayName}
+          />
         </div>
       </ScrollArea>
     </aside>

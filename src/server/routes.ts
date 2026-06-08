@@ -10,7 +10,12 @@ import type {
 } from "../brand/types.js";
 import type { AgentConfigSummary } from "../agent/config.node.js";
 import { logError, logEvent } from "../diagnostics/logger.node.js";
-import { analyzeProject, DEFAULT_ITERATIONS, type AnalyzeOptions, type Project } from "../core/index.js";
+import {
+  analyzeProject,
+  DEFAULT_ITERATIONS,
+  type AnalyzeOptions,
+  type Project,
+} from "../core/index.js";
 import { validateProject } from "../data/schema.js";
 import {
   createProposalAuthorMetadata,
@@ -1072,7 +1077,8 @@ function resolveCreateProposalProjectInput(
     );
   }
 
-  const sourceOfTruth = resolveProposalProjectSourceOfTruth(input);
+  const sourceInput = withStarterProposalDocument(input);
+  const sourceOfTruth = resolveProposalProjectSourceOfTruth(sourceInput);
   if (!sourceOfTruth.ok) return sourceOfTruth;
 
   const createdBy = resolveProposalProjectAuthor(input);
@@ -1113,6 +1119,95 @@ function resolveCreateProposalProjectInput(
       ...(source.value === undefined ? {} : { source: source.value }),
     },
   };
+}
+
+function withStarterProposalDocument(
+  input: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  if (hasProposalProjectSourceInput(input)) return input;
+  return { ...input, draft: createStarterProposalDraft(input) };
+}
+
+function hasProposalProjectSourceInput(input: Readonly<Record<string, unknown>>): boolean {
+  return (
+    Object.hasOwn(input, "sourceOfTruth") ||
+    Object.hasOwn(input, "draft") ||
+    Object.hasOwn(input, "intake") ||
+    looksLikeProposalDraft(input) ||
+    looksLikeProposalIntake(input)
+  );
+}
+
+function createStarterProposalDraft(input: Readonly<Record<string, unknown>>): ProposalDraft {
+  const title = readOptionalString(input, "title") ?? "Untitled proposal";
+  const companyName =
+    readOptionalString(input, "clientName") ??
+    readOptionalString(input, "companyName") ??
+    "Prospective client";
+  const intake = {
+    project: createStarterProject(title),
+    preparedFor: { companyName },
+    details: {
+      title,
+      recommendation: "Define the highest-value first milestone before sending this proposal.",
+      executiveSummary: ["Discovery in progress — gathering goals, value, and scope."],
+      whatWeHeard: ["Initial context is still being collected."],
+    },
+    scope: [
+      {
+        title: "Discovery and scope definition",
+        description: "Clarify the buyer goal, success metric, and first build milestone.",
+        deliverables: ["Validated problem statement", "Prioritized pilot scope"],
+        outcomes: ["A proposal that can be priced and defended."],
+      },
+    ],
+    milestones: [
+      {
+        name: "Scope workshop",
+        timing: "Week 1",
+        outcomes: ["Confirmed goals", "Draft implementation plan"],
+      },
+    ],
+    assumptions: ["The client can provide access to the right business owner."],
+    exclusions: ["Production delivery is not committed until scope and economics are confirmed."],
+    clientInputs: ["A decision-maker joins the scope workshop."],
+    nextSteps: ["Capture the project goal, value thesis, and implementation constraints."],
+  } satisfies ProposalIntake;
+
+  return proposalIntakeToDraft(intake, {
+    templateId: DEFAULT_TEMPLATE_ID,
+    source: "proposal-project-create",
+    notes: ["Started from the project picker."],
+  });
+}
+
+function createStarterProject(title: string): Project {
+  return {
+    project: title,
+    client: { sizeHeadcount: 1, buyerRole: "Business owner", workingWeeks: 46 },
+    cost: {
+      blendedRate: { optimistic: 120, likely: 150, pessimistic: 185 },
+      margin: 0.4,
+      workstreams: [
+        {
+          name: "Scope definition",
+          hours: { optimistic: 4, likely: 6, pessimistic: 10 },
+          aiFactor: 1,
+          judgment: true,
+        },
+      ],
+    },
+    value: {
+      realizationFactor: { low: 0.45, high: 0.55 },
+      segments: [],
+      workflows: [{ name: "Value to be validated", low: 5000, high: 10000 }],
+      futureUpside: [],
+    },
+    pricing: {
+      valueFraction: { low: 0.1, high: 0.2 },
+      tiers: [{ name: "Discovery Sprint", price: 2500 }],
+    },
+  } satisfies Project;
 }
 
 function resolveUpdateProposalProjectInput(

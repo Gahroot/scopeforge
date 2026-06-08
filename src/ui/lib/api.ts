@@ -136,6 +136,19 @@ export interface ProjectBrandImportResponse extends BrandExtractResponse {
   readonly sourceOfTruth: ProposalProjectSourceOfTruth;
 }
 
+export interface CreateProposalProjectBody {
+  readonly title: string;
+  readonly clientName?: string;
+  readonly displayName?: string;
+}
+
+export interface CreateProposalProjectResponse {
+  readonly ok: boolean;
+  readonly project: ProposalProject;
+  readonly currentVersion: ProposalProjectVersion;
+  readonly sourceOfTruth: ProposalProjectSourceOfTruth;
+}
+
 export async function fetchProposalProjects(
   signal?: AbortSignal,
 ): Promise<ApiResult<ProposalProjectsResponse>> {
@@ -152,6 +165,13 @@ export async function fetchProposalProjectState(
     signal === undefined ? {} : { signal },
   );
   return readJson<ProposalProjectStateResponse>(response);
+}
+
+export async function createProposalProject(
+  body: CreateProposalProjectBody,
+  signal?: AbortSignal,
+): Promise<ApiResult<CreateProposalProjectResponse>> {
+  return postJson<CreateProposalProjectResponse>("/api/proposal-projects", body, signal);
 }
 
 export async function importProjectBrand(
@@ -200,6 +220,7 @@ export interface ProposalRequestBody {
   /** Full imported brand profile; takes precedence over `brandId` server-side. */
   readonly brand?: ProposalBrand;
   readonly audience?: ProposalAudience;
+  readonly displayName?: string;
 }
 
 export async function previewProposal(

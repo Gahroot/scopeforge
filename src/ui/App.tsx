@@ -1,19 +1,27 @@
-import { useCallback, useEffect, useState } from "react";
-import { Sparkles } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FileText, Sparkles } from "lucide-react";
+import { BrandBar } from "./brand/BrandBar.js";
+import type { BrandImportProjectUpdate, BrandRole } from "./brand/BrandImportDialog.js";
+import { ChatPanel } from "./chat/ChatPanel.js";
+import { Badge } from "./components/ui/badge.js";
+import { Button } from "./components/ui/button.js";
 import { Input } from "./components/ui/input.js";
 import { TooltipProvider } from "./components/ui/tooltip.js";
-import { ChatPanel } from "./chat/ChatPanel.js";
 import { DraftPanel } from "./draft/DraftPanel.js";
-import { BrandBar } from "./brand/BrandBar.js";
 import { useAgentStream } from "./chat/useAgentStream.js";
 import {
+  createProposalProject,
   fetchBrands,
   fetchHealth,
   fetchProposalProjects,
   fetchProposalProjectState,
+  type CreateProposalProjectResponse,
   type HealthResponse,
+  type ProposalProjectListItemResponse,
+  type ProposalProjectStateResponse,
 } from "./lib/api.js";
-import type { BrandImportProjectUpdate, BrandRole } from "./brand/BrandImportDialog.js";
+import { projectStateToSessionSnapshot } from "./lib/projectSnapshot.js";
+import { ProjectPicker } from "./projects/ProjectPicker.js";
 import type { ProposalBrand } from "../proposal/types.js";
 
 export function App(): JSX.Element {
@@ -22,11 +30,89 @@ export function App(): JSX.Element {
   const [brands, setBrands] = useState<readonly ProposalBrand[]>([]);
   const [vendorBrand, setVendorBrand] = useState<ProposalBrand | null>(null);
   const [clientBrand, setClientBrand] = useState<ProposalBrand | null>(null);
+  const [projects, setProjects] = useState<readonly ProposalProjectListItemResponse[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectError, setProjectError] = useState<string | null>(null);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [openingProjectId, setOpeningProjectId] = useState<string | null>(null);
+  const [projectState, setProjectState] = useState<ProposalProjectStateResponse | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedProjectVersionId, setSelectedProjectVersionId] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState("");
+  const lastAppliedSnapshotRef = useRef<string | null>(null);
   const agent = useAgentStream();
   const collaboratorDisplayName = displayName.trim();
+  const authorDisplayName = collaboratorDisplayName.length === 0 ? null : collaboratorDisplayName;
+
+  const applyProjectState = useCallback((nextState: ProposalProjectStateResponse): void => {
+    setProjectState(nextState);
+    setSelectedProjectId(nextState.project.projectId);
+    setSelectedProjectVersionId(nextState.currentVersion.versionId);
+    setVendorBrand(nextState.sourceOfTruth.vendorBrand);
+    setClientBrand(nextState.sourceOfTruth.clientBrand);
+    setProjects((current) => upsertProjectListItem(current, projectListItemFromState(nextState)));
+  }, []);
+
+  const refreshProjects = useCallback(async (signal?: AbortSignal): Promise<void> => {
+    setProjectsLoading(true);
+    setProjectError(null);
+    try {
+      const result = await fetchProposalProjects(signal);
+      if (result.ok) setProjects(result.value.projects);
+      else setProjectError(result.error.message);
+    } catch (error) {
+      if (signal?.aborted !== true) {
+        setProjectError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (signal?.aborted !== true) setProjectsLoading(false);
+    }
+  }, []);
+
+  const openProject = useCallback(
+    async (projectId: string, options: { readonly resetChat: boolean } = { resetChat: true }) => {
+      setOpeningProjectId(projectId);
+      setProjectError(null);
+      try {
+        const result = await fetchProposalProjectState(projectId);
+        if (!result.ok) {
+          setProjectError(result.error.message);
+          return;
+        }
+        applyProjectState(result.value);
+        if (options.resetChat) agent.reset();
+      } catch (error) {
+        setProjectError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setOpeningProjectId(null);
+      }
+    },
+    [agent.reset, applyProjectState],
+  );
+
+  const createProject = useCallback(
+    async (title: string): Promise<void> => {
+      setCreatingProject(true);
+      setProjectError(null);
+      try {
+        const result = await createProposalProject({
+          title,
+          ...(authorDisplayName === null ? {} : { displayName: authorDisplayName }),
+        });
+        if (!result.ok) {
+          setProjectError(result.error.message);
+          return;
+        }
+        applyProjectState(createResponseToProjectState(result.value));
+        agent.reset();
+      } catch (error) {
+        setProjectError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setCreatingProject(false);
+      }
+    },
+    [agent.reset, applyProjectState, authorDisplayName],
+  );
 
   const handleImported = useCallback(
     (role: BrandRole, brand: ProposalBrand, projectUpdate?: BrandImportProjectUpdate): void => {
@@ -34,69 +120,107 @@ export function App(): JSX.Element {
       else setClientBrand(brand);
 
       if (projectUpdate !== undefined) {
-        setSelectedProjectId(projectUpdate.project.projectId);
-        setSelectedProjectVersionId(projectUpdate.currentVersion.versionId);
-        setVendorBrand(projectUpdate.sourceOfTruth.vendorBrand);
-        setClientBrand(projectUpdate.sourceOfTruth.clientBrand);
+        applyProjectState({ ok: true, ...projectUpdate });
       }
     },
-    [],
+    [applyProjectState],
   );
 
   useEffect(() => {
-    const snapshot = agent.snapshot;
-    if (snapshot?.projectId !== undefined) setSelectedProjectId(snapshot.projectId);
-    if (snapshot?.projectVersionId !== undefined)
-      setSelectedProjectVersionId(snapshot.projectVersionId);
-  }, [agent.snapshot]);
+    const projectId = agent.snapshot?.projectId;
+    const projectVersionId = agent.snapshot?.projectVersionId;
+    if (projectId === undefined || projectVersionId === undefined) return;
+
+    const snapshotKey = `${projectId}:${projectVersionId}`;
+    if (lastAppliedSnapshotRef.current === snapshotKey) return;
+    lastAppliedSnapshotRef.current = snapshotKey;
+    setSelectedProjectId(projectId);
+    setSelectedProjectVersionId(projectVersionId);
+
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const result = await fetchProposalProjectState(projectId, controller.signal);
+        if (result.ok) {
+          applyProjectState(result.value);
+        } else if (!controller.signal.aborted) {
+          setProjectError(result.error.message);
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setProjectError(error instanceof Error ? error.message : String(error));
+        }
+      }
+    })();
+
+    return () => controller.abort();
+  }, [agent.snapshot, applyProjectState]);
 
   useEffect(() => {
     const controller = new AbortController();
     void (async () => {
-      const [healthResult, brandsResult, projectsResult] = await Promise.all([
-        fetchHealth(controller.signal),
-        fetchBrands(controller.signal),
-        fetchProposalProjects(controller.signal),
-      ]);
-      if (healthResult.ok) {
-        setHealth(healthResult.value);
-        setAgentEnabled(healthResult.value.agent.enabled);
-      }
-      if (brandsResult.ok) setBrands(brandsResult.value.brands);
-      if (projectsResult.ok) {
-        const selectedProject = projectsResult.value.projects[0];
-        if (selectedProject !== undefined) {
-          setSelectedProjectId(selectedProject.projectId);
-          setSelectedProjectVersionId(selectedProject.currentVersionId);
-          const stateResult = await fetchProposalProjectState(
-            selectedProject.projectId,
-            controller.signal,
-          );
-          if (stateResult.ok) {
-            setSelectedProjectVersionId(stateResult.value.currentVersion.versionId);
-            setVendorBrand(stateResult.value.sourceOfTruth.vendorBrand);
-            setClientBrand(stateResult.value.sourceOfTruth.clientBrand);
-          }
+      try {
+        const [healthResult, brandsResult, projectsResult] = await Promise.all([
+          fetchHealth(controller.signal),
+          fetchBrands(controller.signal),
+          fetchProposalProjects(controller.signal),
+        ]);
+        if (healthResult.ok) {
+          setHealth(healthResult.value);
+          setAgentEnabled(healthResult.value.agent.enabled);
         }
+        if (brandsResult.ok) setBrands(brandsResult.value.brands);
+        if (projectsResult.ok) setProjects(projectsResult.value.projects);
+        else setProjectError(projectsResult.error.message);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setProjectError(error instanceof Error ? error.message : String(error));
+        }
+      } finally {
+        if (!controller.signal.aborted) setProjectsLoading(false);
       }
     })();
     return () => controller.abort();
   }, []);
 
+  const projectSnapshot = useMemo(
+    () => (projectState === null ? null : projectStateToSessionSnapshot(projectState)),
+    [projectState],
+  );
+  const agentSnapshotMatchesSelected =
+    agent.snapshot !== null &&
+    agent.snapshot.projectId === selectedProjectId &&
+    agent.snapshot.projectVersionId === selectedProjectVersionId;
+  const visibleSnapshot = agentSnapshotMatchesSelected ? agent.snapshot : projectSnapshot;
+  const projectIsOpen = projectState !== null;
+
   return (
     <TooltipProvider delayDuration={200}>
       <div className="flex h-full flex-col bg-background">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b px-6">
-          <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+        <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <Sparkles className="h-4 w-4" />
             </span>
-            <div className="leading-tight">
+            <div className="shrink-0 leading-tight">
               <div className="text-sm font-semibold">ScopeForge</div>
               <div className="text-xs text-muted-foreground">Proposal Copilot</div>
             </div>
+            {projectState !== null && (
+              <ProjectHeaderSummary
+                state={projectState}
+                onBackToProjects={() => {
+                  setProjectState(null);
+                  setSelectedProjectId(null);
+                  setSelectedProjectVersionId(null);
+                  setVendorBrand(null);
+                  setClientBrand(null);
+                  agent.reset();
+                }}
+              />
+            )}
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex shrink-0 items-center gap-4">
             <label
               className="hidden items-center gap-2 text-xs text-muted-foreground md:flex"
               htmlFor="scopeforge-collaborator-display-name"
@@ -110,14 +234,16 @@ export function App(): JSX.Element {
                 onChange={(event) => setDisplayName(event.target.value)}
               />
             </label>
-            <BrandBar
-              vendorBrand={vendorBrand}
-              clientBrand={clientBrand}
-              projectId={selectedProjectId}
-              baseVersionId={selectedProjectVersionId}
-              displayName={collaboratorDisplayName.length === 0 ? null : collaboratorDisplayName}
-              onImported={handleImported}
-            />
+            {projectIsOpen && (
+              <BrandBar
+                vendorBrand={vendorBrand}
+                clientBrand={clientBrand}
+                projectId={selectedProjectId}
+                baseVersionId={selectedProjectVersionId}
+                displayName={authorDisplayName}
+                onImported={handleImported}
+              />
+            )}
 
             <div className="text-xs text-muted-foreground">
               {health === null
@@ -127,24 +253,104 @@ export function App(): JSX.Element {
           </div>
         </header>
 
-        <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)]">
-          <ChatPanel
-            agent={agent}
-            agentEnabled={agentEnabled}
-            displayName={collaboratorDisplayName.length === 0 ? null : collaboratorDisplayName}
-            projectId={selectedProjectId}
-            baseVersion={selectedProjectVersionId}
-            vendorBrand={vendorBrand}
-            clientBrand={clientBrand}
+        {projectIsOpen ? (
+          <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)]">
+            <ChatPanel
+              agent={agent}
+              agentEnabled={agentEnabled}
+              displayName={authorDisplayName}
+              projectId={selectedProjectId}
+              baseVersion={selectedProjectVersionId}
+              vendorBrand={vendorBrand}
+              clientBrand={clientBrand}
+            />
+            <DraftPanel
+              snapshot={visibleSnapshot}
+              brands={brands}
+              busy={agent.status !== "idle"}
+              vendorBrand={vendorBrand}
+              displayName={authorDisplayName}
+            />
+          </main>
+        ) : (
+          <ProjectPicker
+            projects={projects}
+            loading={projectsLoading}
+            creating={creatingProject}
+            openingProjectId={openingProjectId}
+            error={projectError}
+            displayName={authorDisplayName}
+            onCreate={(title) => void createProject(title)}
+            onOpen={(projectId) => void openProject(projectId)}
+            onRefresh={() => void refreshProjects()}
           />
-          <DraftPanel
-            snapshot={agent.snapshot}
-            brands={brands}
-            busy={agent.status !== "idle"}
-            vendorBrand={vendorBrand}
-          />
-        </main>
+        )}
       </div>
     </TooltipProvider>
   );
+}
+
+interface ProjectHeaderSummaryProps {
+  readonly state: ProposalProjectStateResponse;
+  readonly onBackToProjects: () => void;
+}
+
+function ProjectHeaderSummary({ state, onBackToProjects }: ProjectHeaderSummaryProps): JSX.Element {
+  return (
+    <div className="hidden min-w-0 items-center gap-2 rounded-md border bg-muted/40 px-3 py-1.5 text-xs md:flex">
+      <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <span className="truncate font-medium">{state.project.title}</span>
+      <Badge variant={state.project.status === "active" ? "secondary" : "outline"}>
+        {state.project.status}
+      </Badge>
+      <span className="shrink-0 text-muted-foreground">v{state.currentVersion.versionNumber}</span>
+      <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={onBackToProjects}>
+        Projects
+      </Button>
+    </div>
+  );
+}
+
+function createResponseToProjectState(
+  response: CreateProposalProjectResponse,
+): ProposalProjectStateResponse {
+  return {
+    ok: true,
+    project: response.project,
+    currentVersion: response.currentVersion,
+    sourceOfTruth: response.sourceOfTruth,
+  } satisfies ProposalProjectStateResponse;
+}
+
+function projectListItemFromState(
+  state: ProposalProjectStateResponse,
+): ProposalProjectListItemResponse {
+  return {
+    projectId: state.project.projectId,
+    title: state.project.title,
+    status: state.project.status,
+    createdAt: state.project.createdAt,
+    updatedAt: state.project.updatedAt,
+    currentVersionId: state.project.currentVersionId,
+    versionCount: state.project.versions.length,
+  } satisfies ProposalProjectListItemResponse;
+}
+
+function upsertProjectListItem(
+  projects: readonly ProposalProjectListItemResponse[],
+  item: ProposalProjectListItemResponse,
+): readonly ProposalProjectListItemResponse[] {
+  const withoutItem = projects.filter((project) => project.projectId !== item.projectId);
+  return [item, ...withoutItem].sort(compareProjectListItems);
+}
+
+function compareProjectListItems(
+  left: ProposalProjectListItemResponse,
+  right: ProposalProjectListItemResponse,
+): number {
+  const updated = right.updatedAt.localeCompare(left.updatedAt);
+  if (updated !== 0) return updated;
+  const title = left.title.localeCompare(right.title);
+  if (title !== 0) return title;
+  return left.projectId.localeCompare(right.projectId);
 }
