@@ -5,6 +5,7 @@ import {
   type BrandImportProjectUpdate,
   type BrandRole,
 } from "./BrandImportDialog.js";
+import type { ProjectConflictNotice } from "../lib/collaboration.js";
 import type { ProposalBrand } from "../../proposal/types.js";
 
 export interface BrandBarProps {
@@ -18,6 +19,7 @@ export interface BrandBarProps {
     brand: ProposalBrand,
     projectUpdate?: BrandImportProjectUpdate,
   ) => void;
+  readonly onProjectConflict?: ((conflict: ProjectConflictNotice) => void) | undefined;
 }
 
 interface SlotProps {
@@ -55,6 +57,7 @@ export function BrandBar({
   baseVersionId,
   displayName,
   onImported,
+  onProjectConflict,
 }: BrandBarProps): JSX.Element {
   const [openRole, setOpenRole] = useState<BrandRole | null>(null);
 
@@ -82,6 +85,7 @@ export function BrandBar({
           baseVersionId={baseVersionId}
           displayName={displayName}
           onImported={onImported}
+          onProjectConflict={onProjectConflict}
           onClose={() => setOpenRole(null)}
         />
       )}

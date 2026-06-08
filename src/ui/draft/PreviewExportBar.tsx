@@ -6,10 +6,13 @@ import {
   exportProposalProjectPdf,
   previewProposal,
   previewProposalProject,
+  type ApiError,
   type ProjectProposalRequestBody,
   type ProposalRequestBody,
 } from "../lib/api.js";
+import { apiErrorToProjectConflict, type ProjectConflictNotice } from "../lib/collaboration.js";
 import type { SessionSnapshot } from "../lib/types.js";
+import type { ProposalProject } from "../../project/types.js";
 import type { ProposalBrand } from "../../proposal/types.js";
 
 export interface PreviewExportBarProps {
@@ -17,6 +20,9 @@ export interface PreviewExportBarProps {
   readonly disabled: boolean;
   readonly vendorBrand?: ProposalBrand | null;
   readonly displayName: string | null;
+  readonly onProjectConflict?: ((conflict: ProjectConflictNotice) => void) | undefined;
+  readonly onProjectUpdated?: ((project: ProposalProject) => void) | undefined;
+  readonly onProjectActivitySaved?: (() => void) | undefined;
 }
 
 type Action = "preview" | "export" | null;
@@ -26,6 +32,9 @@ export function PreviewExportBar({
   disabled,
   vendorBrand,
   displayName,
+  onProjectConflict,
+  onProjectUpdated,
+  onProjectActivitySaved,
 }: PreviewExportBarProps): JSX.Element {
   const [action, setAction] = useState<Action>(null);
   const [error, setError] = useState<string | null>(null);
@@ -59,9 +68,10 @@ export function PreviewExportBar({
         : await previewProposalProject(projectRequest.projectId, projectRequest.body);
     setAction(null);
     if (!result.ok) {
-      setError(result.error.message);
+      handleProjectActionError("preview", result.error, onProjectConflict, setError);
       return;
     }
+    if (result.value.project !== undefined) onProjectUpdated?.(result.value.project);
     const win = window.open("", "_blank");
     if (win !== null) {
       win.document.open();
@@ -79,9 +89,10 @@ export function PreviewExportBar({
         : await exportProposalProjectPdf(projectRequest.projectId, projectRequest.body);
     setAction(null);
     if (!result.ok) {
-      setError(result.error.message);
+      handleProjectActionError("export", result.error, onProjectConflict, setError);
       return;
     }
+    if (projectRequest !== null) onProjectActivitySaved?.();
     const url = URL.createObjectURL(result.value.bytes);
     const link = document.createElement("a");
     link.href = url;
@@ -127,4 +138,15 @@ export function PreviewExportBar({
       {error !== null && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
+}
+
+function handleProjectActionError(
+  action: Exclude<Action, null>,
+  error: ApiError,
+  onProjectConflict: ((conflict: ProjectConflictNotice) => void) | undefined,
+  setError: (message: string) => void,
+): void {
+  const conflict = apiErrorToProjectConflict(error, action, new Date().toISOString());
+  if (conflict !== null) onProjectConflict?.(conflict);
+  setError(error.message);
 }

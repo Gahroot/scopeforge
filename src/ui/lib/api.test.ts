@@ -3,6 +3,7 @@ import type { ProposalDraft } from "../../proposal/types.js";
 import {
   createProposalProject,
   exportProposalProjectPdf,
+  fetchProposalProjectUpdates,
   importProjectBrand,
   previewProposalProject,
 } from "./api.js";
@@ -41,7 +42,10 @@ describe("UI API client", () => {
       if (path.endsWith("/export-pdf")) {
         return new Response(new Uint8Array([1, 2, 3]), {
           status: 200,
-          headers: { "Content-Disposition": 'attachment; filename="acme.pdf"' },
+          headers: {
+            "Content-Disposition": 'attachment; filename="acme.pdf"',
+            "X-ScopeForge-Pdf-Artifact-Uri": "artifacts/version-2/acme.pdf",
+          },
         });
       }
       if (path.endsWith("/brands/import")) {
@@ -83,7 +87,10 @@ describe("UI API client", () => {
     expect(exportResult).toEqual(
       expect.objectContaining({
         ok: true,
-        value: expect.objectContaining({ fileName: "acme.pdf" }),
+        value: expect.objectContaining({
+          fileName: "acme.pdf",
+          pdfArtifactUri: "artifacts/version-2/acme.pdf",
+        }),
       }),
     );
     expect(calls).toEqual([
@@ -116,11 +123,126 @@ describe("UI API client", () => {
       },
     ]);
   });
+
+  it("polls the lightweight project-updates endpoint for refresh metadata", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("/api/proposal-projects/project%201/updates");
+      expect(init?.method).toBeUndefined();
+      return jsonResponse({
+        ok: true,
+        projectId: "project 1",
+        latestProject: {
+          projectId: "project 1",
+          title: "Acme AI pilot",
+          status: "active",
+          updatedAt: "2026-06-07T13:00:00.000Z",
+          updatedBy: {
+            authorId: "partner-2",
+            displayName: "Partner Two",
+            kind: "human",
+          },
+          currentVersionId: "version-3",
+          currentVersionNumber: 3,
+          versionCount: 3,
+        },
+        latestVersion: {
+          versionId: "version-3",
+          versionNumber: 3,
+          createdAt: "2026-06-07T13:00:00.000Z",
+          createdBy: {
+            authorId: "partner-2",
+            displayName: "Partner Two",
+            kind: "human",
+          },
+          source: "human-edit",
+        },
+        artifactSummary: {
+          artifactCount: 1,
+          latestPdfArtifact: {
+            artifactId: "artifact-pdf-1",
+            kind: "proposal-pdf",
+            origin: "render",
+            uri: "artifacts/version-3/acme.pdf",
+            createdAt: "2026-06-07T13:05:00.000Z",
+            createdBy: {
+              authorId: "partner-2",
+              displayName: "Partner Two",
+              kind: "human",
+            },
+            sourceVersionId: "version-3",
+            sourceVersionHash: "sha256:source",
+          },
+        },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchProposalProjectUpdates("project 1");
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        value: expect.objectContaining({
+          latestProject: expect.objectContaining({ currentVersionId: "version-3" }),
+          artifactSummary: expect.objectContaining({ artifactCount: 1 }),
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves latest project metadata from conflict API responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse(
+          {
+            ok: false,
+            error: {
+              code: "base_version_conflict",
+              message: "Project has changed since the provided baseVersionId.",
+              latestProject: {
+                projectId: "project-1",
+                title: "Acme AI pilot",
+                status: "active",
+                updatedAt: "2026-06-07T14:00:00.000Z",
+                updatedBy: {
+                  authorId: "partner-2",
+                  displayName: "Partner Two",
+                  kind: "human",
+                },
+                currentVersionId: "version-4",
+                currentVersionNumber: 4,
+                versionCount: 4,
+              },
+            },
+          },
+          409,
+        ),
+      ),
+    );
+
+    const result = await previewProposalProject("project-1", {
+      draft: {} as ProposalDraft,
+      audience: "client",
+      baseVersionId: "version-2",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({
+          code: "base_version_conflict",
+          latestProject: expect.objectContaining({ currentVersionNumber: 4 }),
+        }),
+      }),
+    );
+  });
 });
 
-function jsonResponse(body: unknown): Response {
+function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
-    status: 200,
+    status,
     headers: { "Content-Type": "application/json; charset=utf-8" },
   });
 }

@@ -5,7 +5,9 @@ import { ScrollArea } from "../components/ui/scroll-area.js";
 import { PriceCard } from "./PriceCard.js";
 import { GuardrailList } from "./GuardrailList.js";
 import { PreviewExportBar } from "./PreviewExportBar.js";
+import type { ProjectConflictNotice } from "../lib/collaboration.js";
 import type { SessionSnapshot } from "../lib/types.js";
+import type { ProposalProject } from "../../project/types.js";
 import type { ProposalBrand } from "../../proposal/types.js";
 
 export interface DraftPanelProps {
@@ -14,6 +16,9 @@ export interface DraftPanelProps {
   readonly busy: boolean;
   readonly vendorBrand: ProposalBrand | null;
   readonly displayName: string | null;
+  readonly onProjectConflict?: ((conflict: ProjectConflictNotice) => void) | undefined;
+  readonly onProjectUpdated?: ((project: ProposalProject) => void) | undefined;
+  readonly onProjectActivitySaved?: (() => void) | undefined;
 }
 
 function formatMoney(value: number | null): string {
@@ -31,6 +36,9 @@ export function DraftPanel({
   busy,
   vendorBrand,
   displayName,
+  onProjectConflict,
+  onProjectUpdated,
+  onProjectActivitySaved,
 }: DraftPanelProps): JSX.Element {
   if (snapshot === null) {
     return (
@@ -123,6 +131,9 @@ export function DraftPanel({
             disabled={busy}
             vendorBrand={vendorBrand}
             displayName={displayName}
+            onProjectConflict={onProjectConflict}
+            onProjectUpdated={onProjectUpdated}
+            onProjectActivitySaved={onProjectActivitySaved}
           />
         </div>
       </ScrollArea>

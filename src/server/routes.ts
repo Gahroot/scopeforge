@@ -37,6 +37,7 @@ import type {
   CommitProposalProjectVersionInput,
   CreateProposalProjectInput,
   ProposalArtifactRenderMetadata,
+  ProposalArtifactMetadata,
   ProposalAuthorKind,
   ProposalAuthorMetadata,
   ProposalBrandExtractionProvenance,
@@ -232,6 +233,7 @@ type ProposalProjectRoute =
   | { readonly action: "collection" }
   | { readonly action: "state"; readonly projectId: ProposalProjectId }
   | { readonly action: "versions"; readonly projectId: ProposalProjectId }
+  | { readonly action: "updates"; readonly projectId: ProposalProjectId }
   | { readonly action: "preview"; readonly projectId: ProposalProjectId }
   | { readonly action: "exportPdf"; readonly projectId: ProposalProjectId }
   | { readonly action: "importBrand"; readonly projectId: ProposalProjectId };
@@ -244,6 +246,23 @@ interface LoadedProposalProject {
 interface ProposalProjectSourceDefaults {
   readonly vendorBrand: ProposalBrand;
   readonly clientBrand: ProposalBrand;
+}
+
+interface ProposalProjectVersionSummary {
+  readonly versionId: ProposalProjectVersionId;
+  readonly versionNumber: number;
+  readonly createdAt: string;
+  readonly createdBy: ProposalAuthorMetadata;
+  readonly source: ProposalProjectVersionSource;
+  readonly label?: string;
+  readonly reason?: string;
+}
+
+interface ProposalProjectArtifactSummary {
+  readonly artifactCount: number;
+  readonly latestArtifact?: ProposalArtifactMetadata;
+  readonly latestPdfArtifact?: ProposalArtifactMetadata;
+  readonly latestPreviewArtifact?: ProposalArtifactMetadata;
 }
 
 export async function handleApiRoute(
@@ -335,6 +354,10 @@ async function handleProposalProjectRoute(
       if (request.method === "GET")
         return proposalProjectVersionHistoryResponse(route.projectId, dependencies);
       return methodNotAllowedResponse("GET", "Proposal project version history is read-only.");
+    case "updates":
+      if (request.method === "GET")
+        return latestProposalProjectUpdatesResponse(route.projectId, dependencies);
+      return methodNotAllowedResponse("GET", "Proposal project updates are read-only.");
     case "preview":
       if (request.method === "GET" || request.method === "POST") {
         return previewLatestProposalProjectResponse(
@@ -445,6 +468,60 @@ async function proposalProjectVersionHistoryResponse(
     currentVersionId: loaded.value.project.currentVersionId,
     versions: loaded.value.project.versions,
   });
+}
+
+async function latestProposalProjectUpdatesResponse(
+  projectId: ProposalProjectId,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const loaded = await loadProposalProject(projectId, dependencies);
+  if (!loaded.ok) return loaded.response;
+
+  const currentVersion = currentProjectVersionResult(loaded.value.project);
+  if (!currentVersion.ok) return currentVersion.response;
+
+  return jsonResponse(200, {
+    ok: true,
+    projectId: loaded.value.project.projectId,
+    latestProject: projectConflictMetadata(loaded.value.project),
+    latestVersion: summarizeProjectVersion(currentVersion.value),
+    artifactSummary: summarizeProjectArtifacts(loaded.value.project),
+  });
+}
+
+function summarizeProjectVersion(version: ProposalProjectVersion): ProposalProjectVersionSummary {
+  return {
+    versionId: version.versionId,
+    versionNumber: version.versionNumber,
+    createdAt: version.createdAt,
+    createdBy: version.createdBy,
+    source: version.source,
+    ...(version.label === undefined ? {} : { label: version.label }),
+    ...(version.reason === undefined ? {} : { reason: version.reason }),
+  } satisfies ProposalProjectVersionSummary;
+}
+
+function summarizeProjectArtifacts(project: ProposalProject): ProposalProjectArtifactSummary {
+  const artifacts = [...project.artifacts].sort(compareArtifactsNewestFirst);
+  const latestArtifact = artifacts[0];
+  const latestPdfArtifact = artifacts.find((artifact) => artifact.kind === "proposal-pdf");
+  const latestPreviewArtifact = artifacts.find((artifact) => artifact.kind === "proposal-preview");
+
+  return {
+    artifactCount: project.artifacts.length,
+    ...(latestArtifact === undefined ? {} : { latestArtifact }),
+    ...(latestPdfArtifact === undefined ? {} : { latestPdfArtifact }),
+    ...(latestPreviewArtifact === undefined ? {} : { latestPreviewArtifact }),
+  } satisfies ProposalProjectArtifactSummary;
+}
+
+function compareArtifactsNewestFirst(
+  left: ProposalArtifactMetadata,
+  right: ProposalArtifactMetadata,
+): number {
+  const createdAt = right.createdAt.localeCompare(left.createdAt);
+  if (createdAt !== 0) return createdAt;
+  return right.artifactId.localeCompare(left.artifactId);
 }
 
 async function updateProposalProjectResponse(
@@ -1789,6 +1866,8 @@ function parseProposalProjectRoute(pathname: string): ProposalProjectRoute | nul
   switch (action) {
     case "versions":
       return { action: "versions", projectId };
+    case "updates":
+      return { action: "updates", projectId };
     case "preview":
       return { action: "preview", projectId };
     case "export":
@@ -1859,6 +1938,7 @@ function healthResponse(agentSummary?: AgentConfigSummary): ApiRouteResponse {
       "proposalProject.list",
       "proposalProject.latestState",
       "proposalProject.versionHistory",
+      "proposalProject.projectUpdates",
       "proposalProject.updateWithBaseVersion",
       "proposalProject.previewLatest",
       "proposalProject.exportLatestPdf",

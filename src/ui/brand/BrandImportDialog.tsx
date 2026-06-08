@@ -3,6 +3,7 @@ import { Loader2, X } from "lucide-react";
 import { Button } from "../components/ui/button.js";
 import { Input } from "../components/ui/input.js";
 import { importProjectBrand } from "../lib/api.js";
+import { apiErrorToProjectConflict, type ProjectConflictNotice } from "../lib/collaboration.js";
 import type {
   ProposalProject,
   ProposalProjectSourceOfTruth,
@@ -28,6 +29,7 @@ export interface BrandImportDialogProps {
     brand: ProposalBrand,
     projectUpdate?: BrandImportProjectUpdate,
   ) => void;
+  readonly onProjectConflict?: ((conflict: ProjectConflictNotice) => void) | undefined;
   readonly onClose: () => void;
 }
 
@@ -48,6 +50,7 @@ export function BrandImportDialog({
   baseVersionId,
   displayName,
   onImported,
+  onProjectConflict,
   onClose,
 }: BrandImportDialogProps): JSX.Element {
   const [url, setUrl] = useState("");
@@ -83,6 +86,12 @@ export function BrandImportDialog({
     const result = await importProjectBrand(projectId, baseVersionId, role, trimmed, displayName);
     setBusy(false);
     if (!result.ok) {
+      const conflict = apiErrorToProjectConflict(
+        result.error,
+        "brand import",
+        new Date().toISOString(),
+      );
+      if (conflict !== null) onProjectConflict?.(conflict);
       setError(result.error.message);
       return;
     }

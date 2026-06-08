@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import type { ProjectConflictNotice } from "../lib/collaboration.js";
 import type { AgentMessageRequest, AgentStreamFrame, SessionSnapshot } from "../lib/types.js";
 
 export type AgentStatus = "idle" | "thinking" | "streaming" | "tool";
@@ -39,6 +40,7 @@ export interface AgentStreamApi {
   readonly status: AgentStatus;
   readonly snapshot: SessionSnapshot | null;
   readonly error: string | null;
+  readonly projectConflict: ProjectConflictNotice | null;
   send(message: string, options?: AgentSendOptions): Promise<void>;
   stop(): void;
   reset(): void;
@@ -72,6 +74,7 @@ export function useAgentStream(): AgentStreamApi {
   const [status, setStatus] = useState<AgentStatus>("idle");
   const [snapshot, setSnapshot] = useState<SessionSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [projectConflict, setProjectConflict] = useState<ProjectConflictNotice | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -90,6 +93,7 @@ export function useAgentStream(): AgentStreamApi {
     async (text: string, options?: AgentSendOptions): Promise<void> => {
       if (status !== "idle") return;
       setError(null);
+      setProjectConflict(null);
       const assistantId = makeId();
       setMessages((prev) => [
         ...prev,
@@ -111,12 +115,20 @@ export function useAgentStream(): AgentStreamApi {
         });
 
         if (!response.ok || response.body === null) {
-          const message = await readErrorMessage(response);
+          const errorPayload = await readErrorPayload(response);
           patchAssistant(assistantId, (m) => {
-            m.error = message;
+            m.error = errorPayload.message;
             m.streaming = false;
           });
-          setError(message);
+          setError(errorPayload.message);
+          if (errorPayload.latestProject !== undefined) {
+            setProjectConflict({
+              action: "agent",
+              message: errorPayload.message,
+              latestProject: errorPayload.latestProject,
+              occurredAt: new Date().toISOString(),
+            });
+          }
           setStatus("idle");
           return;
         }
@@ -127,6 +139,7 @@ export function useAgentStream(): AgentStreamApi {
             setStatus,
             setSnapshot,
             setError,
+            setProjectConflict,
             sessionIdRef,
           });
         });
@@ -168,9 +181,10 @@ export function useAgentStream(): AgentStreamApi {
     setStatus("idle");
     setSnapshot(null);
     setError(null);
+    setProjectConflict(null);
   }, []);
 
-  return { messages, status, snapshot, error, send, stop, reset };
+  return { messages, status, snapshot, error, projectConflict, send, stop, reset };
 }
 
 interface ApplyContext {
@@ -178,6 +192,7 @@ interface ApplyContext {
   readonly setStatus: (status: AgentStatus) => void;
   readonly setSnapshot: (snapshot: SessionSnapshot) => void;
   readonly setError: (error: string | null) => void;
+  readonly setProjectConflict: (conflict: ProjectConflictNotice | null) => void;
   readonly sessionIdRef: { current: string | null };
 }
 
@@ -228,6 +243,14 @@ function applyFrame(frame: AgentStreamFrame, assistantId: string, ctx: ApplyCont
         m.error = frame.message;
       });
       ctx.setError(frame.message);
+      if (frame.latestProject !== undefined) {
+        ctx.setProjectConflict({
+          action: "agent",
+          message: frame.message,
+          latestProject: frame.latestProject,
+          occurredAt: new Date().toISOString(),
+        });
+      }
       break;
     case "done":
       break;
@@ -271,11 +294,34 @@ function parseSseEvent(rawEvent: string): AgentStreamFrame | null {
   }
 }
 
-async function readErrorMessage(response: Response): Promise<string> {
+interface StreamErrorPayload {
+  readonly message: string;
+  readonly latestProject?: ProjectConflictNotice["latestProject"];
+}
+
+async function readErrorPayload(response: Response): Promise<StreamErrorPayload> {
   try {
-    const payload = (await response.json()) as { error?: { message?: string } };
-    return payload.error?.message ?? `Request failed (${response.status}).`;
+    const payload = await response.json();
+    if (!isRecord(payload) || !isRecord(payload.error)) {
+      return { message: `Request failed (${response.status}).` };
+    }
+
+    const message =
+      typeof payload.error.message === "string"
+        ? payload.error.message
+        : `Request failed (${response.status}).`;
+    const latestProject = payload.error.latestProject;
+    return {
+      message,
+      ...(isRecord(latestProject)
+        ? { latestProject: latestProject as unknown as ProjectConflictNotice["latestProject"] }
+        : {}),
+    };
   } catch {
-    return `Request failed (${response.status}).`;
+    return { message: `Request failed (${response.status}).` };
   }
+}
+
+function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
 }

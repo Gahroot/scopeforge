@@ -1,5 +1,6 @@
 import type { ProposalProjectConflictMetadata } from "../../project/store.node.js";
 import type {
+  ProposalArtifactMetadata,
   ProposalProject,
   ProposalProjectSourceOfTruth,
   ProposalProjectVersion,
@@ -116,6 +117,13 @@ export interface ProposalProjectListItemResponse {
   readonly versionCount: number;
 }
 
+export interface ProposalProjectArtifactSummaryResponse {
+  readonly artifactCount: number;
+  readonly latestArtifact?: ProposalArtifactMetadata;
+  readonly latestPdfArtifact?: ProposalArtifactMetadata;
+  readonly latestPreviewArtifact?: ProposalArtifactMetadata;
+}
+
 export interface ProposalProjectsResponse {
   readonly ok: boolean;
   readonly projects: readonly ProposalProjectListItemResponse[];
@@ -126,6 +134,19 @@ export interface ProposalProjectStateResponse {
   readonly project: ProposalProject;
   readonly currentVersion: ProposalProjectVersion;
   readonly sourceOfTruth: ProposalProjectSourceOfTruth;
+}
+
+export type ProposalProjectVersionSummaryResponse = Pick<
+  ProposalProjectVersion,
+  "versionId" | "versionNumber" | "createdAt" | "createdBy" | "source" | "label" | "reason"
+>;
+
+export interface ProposalProjectUpdatesResponse {
+  readonly ok: boolean;
+  readonly projectId: string;
+  readonly latestProject: ProposalProjectConflictMetadata;
+  readonly latestVersion: ProposalProjectVersionSummaryResponse;
+  readonly artifactSummary: ProposalProjectArtifactSummaryResponse;
 }
 
 export interface ProjectBrandImportResponse extends BrandExtractResponse {
@@ -165,6 +186,17 @@ export async function fetchProposalProjectState(
     signal === undefined ? {} : { signal },
   );
   return readJson<ProposalProjectStateResponse>(response);
+}
+
+export async function fetchProposalProjectUpdates(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<ProposalProjectUpdatesResponse>> {
+  const response = await fetch(
+    `/api/proposal-projects/${encodeURIComponent(projectId)}/updates`,
+    signal === undefined ? {} : { signal },
+  );
+  return readJson<ProposalProjectUpdatesResponse>(response);
 }
 
 export async function createProposalProject(
@@ -212,6 +244,9 @@ export interface PreviewResponse {
   readonly ok: boolean;
   readonly html: string;
   readonly audience: ProposalAudience;
+  readonly currentVersionId?: string;
+  readonly artifact?: ProposalArtifactMetadata;
+  readonly project?: ProposalProject;
 }
 
 export interface ProposalRequestBody {
@@ -249,6 +284,10 @@ export async function previewProposalProject(
 export interface ExportPdfResult {
   readonly bytes: Blob;
   readonly fileName: string;
+  readonly htmlArtifactId?: string;
+  readonly htmlArtifactUri?: string;
+  readonly pdfArtifactId?: string;
+  readonly pdfArtifactUri?: string;
 }
 
 export async function exportProposalPdf(
@@ -290,5 +329,19 @@ async function exportPdfFromPath(
   const disposition = response.headers.get("Content-Disposition") ?? "";
   const match = /filename="([^"]+)"/.exec(disposition);
   const fileName = match?.[1] ?? "proposal.pdf";
-  return { ok: true, value: { bytes, fileName } };
+  const htmlArtifactId = response.headers.get("X-ScopeForge-Html-Artifact-Id") ?? undefined;
+  const htmlArtifactUri = response.headers.get("X-ScopeForge-Html-Artifact-Uri") ?? undefined;
+  const pdfArtifactId = response.headers.get("X-ScopeForge-Pdf-Artifact-Id") ?? undefined;
+  const pdfArtifactUri = response.headers.get("X-ScopeForge-Pdf-Artifact-Uri") ?? undefined;
+  return {
+    ok: true,
+    value: {
+      bytes,
+      fileName,
+      ...(htmlArtifactId === undefined ? {} : { htmlArtifactId }),
+      ...(htmlArtifactUri === undefined ? {} : { htmlArtifactUri }),
+      ...(pdfArtifactId === undefined ? {} : { pdfArtifactId }),
+      ...(pdfArtifactUri === undefined ? {} : { pdfArtifactUri }),
+    },
+  };
 }

@@ -518,6 +518,19 @@ describe("server API routes", () => {
         }),
       );
 
+      const updatesResponse = await handleApiRoute(
+        { method: "GET", pathname: `/api/proposal-projects/${projectId}/updates` },
+        { proposalProjectStore: store },
+      );
+      const updatesJson = expectJson(updatesResponse);
+      const latestProject = readRecordField(updatesJson.body, "latestProject");
+      const artifactSummary = readRecordField(updatesJson.body, "artifactSummary");
+
+      expect(updatesJson.status).toBe(200);
+      expect(readStringField(latestProject, "currentVersionId")).toBe(updatedVersionId);
+      expect(readNumberField(latestProject, "currentVersionNumber")).toBe(2);
+      expect(readNumberField(artifactSummary, "artifactCount")).toBe(0);
+
       const previewResponse = await handleApiRoute(
         {
           method: "POST",

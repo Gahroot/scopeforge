@@ -15,14 +15,21 @@ import {
   fetchHealth,
   fetchProposalProjects,
   fetchProposalProjectState,
+  fetchProposalProjectUpdates,
   type CreateProposalProjectResponse,
   type HealthResponse,
   type ProposalProjectListItemResponse,
   type ProposalProjectStateResponse,
+  type ProposalProjectUpdatesResponse,
 } from "./lib/api.js";
+import { projectUpdateFromState, type ProjectConflictNotice } from "./lib/collaboration.js";
 import { projectStateToSessionSnapshot } from "./lib/projectSnapshot.js";
+import { CollaborationStatus } from "./projects/CollaborationStatus.js";
 import { ProjectPicker } from "./projects/ProjectPicker.js";
+import type { ProposalProject } from "../project/types.js";
 import type { ProposalBrand } from "../proposal/types.js";
+
+const PROJECT_UPDATES_POLL_MS = 5_000;
 
 export function App(): JSX.Element {
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -36,6 +43,9 @@ export function App(): JSX.Element {
   const [creatingProject, setCreatingProject] = useState(false);
   const [openingProjectId, setOpeningProjectId] = useState<string | null>(null);
   const [projectState, setProjectState] = useState<ProposalProjectStateResponse | null>(null);
+  const [projectUpdate, setProjectUpdate] = useState<ProposalProjectUpdatesResponse | null>(null);
+  const [projectConflict, setProjectConflict] = useState<ProjectConflictNotice | null>(null);
+  const [refreshingLatest, setRefreshingLatest] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedProjectVersionId, setSelectedProjectVersionId] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState("");
@@ -46,6 +56,8 @@ export function App(): JSX.Element {
 
   const applyProjectState = useCallback((nextState: ProposalProjectStateResponse): void => {
     setProjectState(nextState);
+    setProjectUpdate(projectUpdateFromState(nextState));
+    setProjectConflict(null);
     setSelectedProjectId(nextState.project.projectId);
     setSelectedProjectVersionId(nextState.currentVersion.versionId);
     setVendorBrand(nextState.sourceOfTruth.vendorBrand);
@@ -126,6 +138,38 @@ export function App(): JSX.Element {
     [applyProjectState],
   );
 
+  const handleProjectActivityUpdated = useCallback((project: ProposalProject): void => {
+    setProjectState((current) => {
+      if (current === null || current.project.projectId !== project.projectId) return current;
+      const nextState = { ...current, project } satisfies ProposalProjectStateResponse;
+      setProjectUpdate(projectUpdateFromState(nextState));
+      setProjects((items) => upsertProjectListItem(items, projectListItemFromState(nextState)));
+      return nextState;
+    });
+  }, []);
+
+  const handleProjectConflict = useCallback((conflict: ProjectConflictNotice): void => {
+    setProjectConflict(conflict);
+  }, []);
+
+  const refreshLatestProject = useCallback(async (): Promise<void> => {
+    if (selectedProjectId === null) return;
+    setRefreshingLatest(true);
+    setProjectError(null);
+    try {
+      const result = await fetchProposalProjectState(selectedProjectId);
+      if (!result.ok) {
+        setProjectError(result.error.message);
+        return;
+      }
+      applyProjectState(result.value);
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRefreshingLatest(false);
+    }
+  }, [applyProjectState, selectedProjectId]);
+
   useEffect(() => {
     const projectId = agent.snapshot?.projectId;
     const projectVersionId = agent.snapshot?.projectVersionId;
@@ -157,6 +201,10 @@ export function App(): JSX.Element {
   }, [agent.snapshot, applyProjectState]);
 
   useEffect(() => {
+    if (agent.projectConflict !== null) setProjectConflict(agent.projectConflict);
+  }, [agent.projectConflict]);
+
+  useEffect(() => {
     const controller = new AbortController();
     void (async () => {
       try {
@@ -182,6 +230,34 @@ export function App(): JSX.Element {
     })();
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    if (selectedProjectId === null) return;
+
+    const controller = new AbortController();
+    const pollProjectUpdates = async (): Promise<void> => {
+      try {
+        const result = await fetchProposalProjectUpdates(selectedProjectId, controller.signal);
+        if (controller.signal.aborted) return;
+        if (result.ok) {
+          setProjectUpdate(result.value);
+        } else if (result.error.code === "project_not_found") {
+          setProjectError(result.error.message);
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setProjectError(error instanceof Error ? error.message : String(error));
+        }
+      }
+    };
+
+    void pollProjectUpdates();
+    const intervalId = window.setInterval(() => void pollProjectUpdates(), PROJECT_UPDATES_POLL_MS);
+    return () => {
+      window.clearInterval(intervalId);
+      controller.abort();
+    };
+  }, [selectedProjectId]);
 
   const projectSnapshot = useMemo(
     () => (projectState === null ? null : projectStateToSessionSnapshot(projectState)),
@@ -211,6 +287,8 @@ export function App(): JSX.Element {
                 state={projectState}
                 onBackToProjects={() => {
                   setProjectState(null);
+                  setProjectUpdate(null);
+                  setProjectConflict(null);
                   setSelectedProjectId(null);
                   setSelectedProjectVersionId(null);
                   setVendorBrand(null);
@@ -242,6 +320,7 @@ export function App(): JSX.Element {
                 baseVersionId={selectedProjectVersionId}
                 displayName={authorDisplayName}
                 onImported={handleImported}
+                onProjectConflict={handleProjectConflict}
               />
             )}
 
@@ -252,6 +331,16 @@ export function App(): JSX.Element {
             </div>
           </div>
         </header>
+
+        {projectState !== null && (
+          <CollaborationStatus
+            state={projectState}
+            update={projectUpdate}
+            conflict={projectConflict}
+            refreshing={refreshingLatest}
+            onRefreshLatest={() => void refreshLatestProject()}
+          />
+        )}
 
         {projectIsOpen ? (
           <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)]">
@@ -270,6 +359,9 @@ export function App(): JSX.Element {
               busy={agent.status !== "idle"}
               vendorBrand={vendorBrand}
               displayName={authorDisplayName}
+              onProjectConflict={handleProjectConflict}
+              onProjectUpdated={handleProjectActivityUpdated}
+              onProjectActivitySaved={() => void refreshLatestProject()}
             />
           </main>
         ) : (
