@@ -293,18 +293,14 @@ export class LocalProposalProjectStore {
       }
 
       const sourceVersionId = input.sourceVersionId ?? project.currentVersionId;
-      const sourceVersion = project.versions.find(
-        (version) => version.versionId === sourceVersionId,
-      );
+      const sourceVersion = project.versions.find((version) => version.versionId === sourceVersionId);
       if (sourceVersion === undefined) {
         throw new Error(`Cannot save proposal artifact for missing version ${sourceVersionId}.`);
       }
 
       const content = artifactBytes(input.content);
       const artifactHash = hashBytes(content);
-      const fileName = sanitizeArtifactFileName(
-        input.fileName ?? defaultArtifactFileName(input.kind),
-      );
+      const fileName = sanitizeArtifactFileName(input.fileName ?? defaultArtifactFileName(input.kind));
       const relativePath = artifactRelativePath(project, sourceVersion, fileName);
       const absolutePath = join(projectDirectory(this.dataDir, projectId), relativePath);
       await writeImmutableBinaryFile(absolutePath, content);

@@ -17,7 +17,12 @@ const TEXT_SECTIONS = [
   "pricingSummary",
 ] as const;
 
-const LIST_SECTIONS = ["executiveSummary", "whatWeHeard", "unlocks", "nextSteps"] as const;
+const LIST_SECTIONS = [
+  "executiveSummary",
+  "whatWeHeard",
+  "unlocks",
+  "nextSteps",
+] as const;
 
 type TextSection = (typeof TEXT_SECTIONS)[number];
 type ListSection = (typeof LIST_SECTIONS)[number];
@@ -91,18 +96,12 @@ export function reviseSectionCopy(deps: ResolvedToolDeps) {
     execute: (args) => {
       if (isListSection(args.section)) {
         if (args.items === undefined) {
-          return snapshotResult(
-            session,
-            `Section "${args.section}" needs a non-empty \`items\` array.`,
-          );
+          return snapshotResult(session, `Section "${args.section}" needs a non-empty \`items\` array.`);
         }
         session.store = applyList(session.store, args.section, args.items);
       } else {
         if (args.text === undefined) {
-          return snapshotResult(
-            session,
-            `Section "${args.section}" needs a non-empty \`text\` value.`,
-          );
+          return snapshotResult(session, `Section "${args.section}" needs a non-empty \`text\` value.`);
         }
         session.store = applyText(session.store, args.section as TextSection, args.text);
       }

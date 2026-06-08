@@ -70,11 +70,7 @@ function buildAgent(session: AgentSession): Agent {
     model: "test",
     apiKey: "test-key",
     system: "You are a test harness.",
-    tools: createScopeForgeTools({
-      session,
-      now: () => new Date("2025-01-01T00:00:00Z"),
-      renderPdf: noopPdf,
-    }),
+    tools: createScopeForgeTools({ session, now: () => new Date("2025-01-01T00:00:00Z"), renderPdf: noopPdf }),
     signal: new AbortController().signal,
     maxTurns: 6,
   });
@@ -119,15 +115,11 @@ describe("ScopeForge tools under a fake provider", () => {
       false,
     ]);
     const analyzeEnd = events.find(
-      (e) =>
-        e.type === "tool_call_end" &&
-        typeof e.result === "string" &&
-        e.result.includes("Lead price"),
+      (e) => e.type === "tool_call_end" && typeof e.result === "string" && e.result.includes("Lead price"),
     );
     expect(analyzeEnd).toBeDefined();
     const exportEnd = events.find(
-      (e) =>
-        e.type === "tool_call_end" && typeof e.result === "string" && e.result.includes("bytes"),
+      (e) => e.type === "tool_call_end" && typeof e.result === "string" && e.result.includes("bytes"),
     );
     expect(exportEnd).toBeDefined();
   });

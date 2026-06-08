@@ -49,7 +49,8 @@ export function generatePhasePlanFromScope(deps: ResolvedToolDeps) {
         description: deliverable.description,
         activities: deliverable.included,
         outcomes:
-          deliverable.acceptanceCriteria !== undefined && deliverable.acceptanceCriteria.length > 0
+          deliverable.acceptanceCriteria !== undefined &&
+          deliverable.acceptanceCriteria.length > 0
             ? deliverable.acceptanceCriteria
             : [`${deliverable.title} delivered and accepted by the client`],
       }));
