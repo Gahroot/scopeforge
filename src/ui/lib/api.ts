@@ -5,6 +5,11 @@ import type {
   ProposalProjectSourceOfTruth,
   ProposalProjectVersion,
 } from "../../project/types.js";
+import type {
+  ProposalDraftCandidate,
+  SourceMaterialDocument,
+  SourceMaterialKind,
+} from "../../ingest/types.js";
 import type { ProposalAudience, ProposalBrand, ProposalDraft } from "../../proposal/types.js";
 
 export interface HealthAgentSummary {
@@ -224,6 +229,37 @@ export async function importProjectBrand(
     },
     signal,
   );
+}
+
+export interface SourceMaterialFileBody {
+  readonly name?: string;
+  readonly mediaType?: string;
+  readonly base64: string;
+}
+
+export interface SourceMaterialIngestBody {
+  readonly sourceKind?: SourceMaterialKind;
+  readonly sourceName?: string;
+  readonly text?: string;
+  readonly file?: SourceMaterialFileBody;
+}
+
+export interface SourceMaterialIngestResponse {
+  readonly ok: boolean;
+  readonly document: SourceMaterialDocument;
+  readonly candidate: ProposalDraftCandidate;
+  readonly limits: {
+    readonly maxFileBytes: number;
+    readonly maxBase64Characters: number;
+    readonly maxTextCharacters: number;
+  };
+}
+
+export async function ingestSourceMaterial(
+  body: SourceMaterialIngestBody,
+  signal?: AbortSignal,
+): Promise<ApiResult<SourceMaterialIngestResponse>> {
+  return postJson<SourceMaterialIngestResponse>("/api/source-material/ingest", body, signal);
 }
 
 async function postJson<T>(

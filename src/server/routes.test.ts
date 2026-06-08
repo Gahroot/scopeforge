@@ -127,6 +127,77 @@ describe("server API routes", () => {
     );
   });
 
+  it("ingests source material into a proposal candidate with explicit missing inputs", async () => {
+    const response = await handleApiRoute({
+      method: "POST",
+      pathname: "/api/source-material/ingest",
+      body: {
+        sourceKind: "meeting_notes",
+        sourceName: "Discovery notes",
+        text: [
+          "Client: Acme Operations",
+          "Buyer: Riley Chen, COO",
+          "Systems: Power BI, Monday",
+          "Pain points: manual reconciliation and slow reporting",
+          "Scope: reporting data layer",
+          "Budget: $40k pilot",
+        ].join("\n"),
+      },
+    });
+    const json = expectJson(response);
+    const candidate = readRecordField(json.body, "candidate");
+    const facts = readRecordField(candidate, "facts");
+    const draftPatch = readRecordField(candidate, "draftPatch");
+    const projectHints = readRecordField(draftPatch, "projectHints");
+    const observedPricing = readArrayField(projectHints, "observedPricing");
+    const missingInputs = readArrayField(candidate, "missingInputs");
+
+    expect(json.status).toBe(200);
+    expect(readStringField(facts, "companyName")).toBe("Acme Operations");
+    expect(readArrayField(facts, "systems")).toEqual(
+      expect.arrayContaining(["Monday", "Power BI"]),
+    );
+    expect(observedPricing).toEqual([expect.objectContaining({ price: 40000 })]);
+    expect(missingInputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "project.cost.workstreams.estimates" }),
+        expect.objectContaining({ key: "project.value.realizationFactor" }),
+      ]),
+    );
+  });
+
+  it("ingests uploaded text files from base64 payloads", async () => {
+    const response = await handleApiRoute({
+      method: "POST",
+      pathname: "/api/source-material/ingest",
+      body: {
+        sourceKind: "meeting_notes",
+        file: {
+          name: "upload-notes.txt",
+          mediaType: "text/plain",
+          base64: Buffer.from(
+            [
+              "Client: Upload Co",
+              "Buyer: Alex Morgan, CFO",
+              "Scope: finance reporting workflow",
+            ].join("\n"),
+          ).toString("base64"),
+        },
+      },
+    });
+    const json = expectJson(response);
+    const document = readRecordField(json.body, "document");
+    const metadata = readRecordField(document, "metadata");
+    const candidate = readRecordField(json.body, "candidate");
+    const facts = readRecordField(candidate, "facts");
+
+    expect(json.status).toBe(200);
+    expect(readStringField(metadata, "origin")).toBe("upload");
+    expect(readStringField(metadata, "sourceName")).toBe("upload-notes.txt");
+    expect(readStringField(facts, "companyName")).toBe("Upload Co");
+    expect(readStringField(facts, "buyerTitle")).toBe("CFO");
+  });
+
   it("extracts a ProposalBrand-compatible profile from website HTML", async () => {
     const fetchImpl: typeof fetch = async (input) => {
       expect(String(input)).toBe("https://acme.example/");

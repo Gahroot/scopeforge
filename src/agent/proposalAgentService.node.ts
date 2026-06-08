@@ -68,6 +68,7 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   patch_pricing: "Updating pricing",
   set_terms: "Updating terms",
   set_next_steps: "Setting next steps",
+  ingest_source_material: "Ingesting source material",
   run_analysis: "Running analysis",
   validate_draft: "Validating draft",
   get_draft_summary: "Reviewing draft",

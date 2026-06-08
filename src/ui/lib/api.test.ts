@@ -5,6 +5,7 @@ import {
   exportProposalProjectPdf,
   fetchProposalProjectUpdates,
   importProjectBrand,
+  ingestSourceMaterial,
   previewProposalProject,
 } from "./api.js";
 
@@ -122,6 +123,29 @@ describe("UI API client", () => {
         },
       },
     ]);
+  });
+
+  it("posts source material ingestion requests", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("/api/source-material/ingest");
+      expect(init?.method).toBe("POST");
+      expect(readJsonBody(init)).toEqual({
+        sourceKind: "meeting_notes",
+        sourceName: "Discovery notes",
+        text: "Client: Acme Operations",
+      });
+      return jsonResponse({ ok: true, document: {}, candidate: {}, limits: {} });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await ingestSourceMaterial({
+      sourceKind: "meeting_notes",
+      sourceName: "Discovery notes",
+      text: "Client: Acme Operations",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("polls the lightweight project-updates endpoint for refresh metadata", async () => {

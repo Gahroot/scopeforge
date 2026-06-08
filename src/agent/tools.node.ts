@@ -8,6 +8,13 @@ import type {
 } from "@kenkaiiii/gg-agent";
 import { analyzeProject } from "../core/index.js";
 import { leadPrice } from "../core/pricing.js";
+import {
+  MAX_SOURCE_MATERIAL_TEXT_CHARS,
+  applyProposalDraftCandidatePatch,
+  createProposalDraftCandidate,
+  extractSourceMaterialFromText,
+  formatMissingInputs,
+} from "../ingest/index.js";
 import type { NamedRange, Project, Range, TriEstimate, Workstream } from "../core/types.js";
 import { formatMoney, formatMoneyRange, formatMonths } from "../proposal/format.js";
 import {
@@ -52,6 +59,14 @@ const triSchema = z.object({
 });
 
 const rangeSchema = z.object({ low: z.number(), high: z.number() });
+
+const sourceMaterialKindSchema = z.enum([
+  "meeting_notes",
+  "transcript_summary",
+  "text",
+  "json",
+  "pdf",
+]);
 
 const workstreamSchema = z.object({
   name: z.string().min(1),
@@ -432,6 +447,70 @@ export function createProposalTools(session: AgentSession): AgentTool[] {
     },
   });
 
+  const ingestSourceMaterial = defineTool({
+    name: "ingest_source_material",
+    description:
+      "Convert pasted meeting notes, transcript summaries, extracted text/JSON, or PDF text into a ProposalDraft candidate. " +
+      "This tool only applies observed non-economic facts and always lists missing cost/value/pricing inputs instead of inventing numbers.",
+    executionMode: "sequential",
+    parameters: z.object({
+      material: z.string().min(1).max(MAX_SOURCE_MATERIAL_TEXT_CHARS),
+      sourceKind: sourceMaterialKindSchema.optional(),
+      sourceName: z.string().min(1).optional(),
+      applySafePatch: z
+        .boolean()
+        .optional()
+        .describe(
+          "When true, apply only safe observed narrative/client fields to the draft. Never sets workstream hours, value ranges, realization, or prices.",
+        ),
+    }),
+    execute: (args) => {
+      const extracted = extractSourceMaterialFromText({
+        text: args.material,
+        ...(args.sourceKind === undefined ? {} : { sourceKind: args.sourceKind }),
+        ...(args.sourceName === undefined ? {} : { sourceName: args.sourceName }),
+        origin: "tool",
+      });
+      if (!extracted.ok) {
+        return snapshotResult(
+          session,
+          `Could not ingest source material: ${extracted.error.message}`,
+        );
+      }
+
+      const candidate = createProposalDraftCandidate(extracted.document);
+      const applied = args.applySafePatch === true;
+      if (applied) {
+        session.store = updateProposalDraft(
+          session.store,
+          (draft) => applyProposalDraftCandidatePatch(draft, candidate),
+          {
+            ...COMMIT,
+            label: "Ingest source material",
+            notes: [
+              "Applied observed non-economic fields from source material. Cost, value, realization, and pricing numbers still require confirmation.",
+            ],
+          },
+        );
+      }
+
+      const missing = formatMissingInputs(candidate.missingInputs);
+      return {
+        content: [
+          candidate.summary,
+          applied
+            ? "Applied safe observed fields to the draft; no economic estimates or prices were invented."
+            : "Draft unchanged; review the candidate before applying any fields.",
+          `Still needed:\n${missing}`,
+        ].join("\n\n"),
+        details: {
+          ...buildSessionSnapshot(session),
+          sourceMaterial: { document: extracted.document, candidate, applied },
+        },
+      } satisfies StructuredToolResult;
+    },
+  });
+
   const runAnalysis = defineTool({
     name: "run_analysis",
     description:
@@ -509,6 +588,7 @@ export function createProposalTools(session: AgentSession): AgentTool[] {
     patchPricing,
     setTerms,
     setNextSteps,
+    ingestSourceMaterial,
     runAnalysis,
     validateDraft,
     getDraftSummary,

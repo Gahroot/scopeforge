@@ -17,6 +17,7 @@ import { explainGuardrails } from "./explainGuardrails.js";
 import { renderProposalPreview } from "./renderProposalPreview.js";
 import { renderProposalPdf } from "./renderProposalPdf.js";
 import { askForMissingInputs } from "./askForMissingInputs.js";
+import { ingestSourceMaterial } from "./ingestSourceMaterial.js";
 import { switchTemplate } from "./switchTemplate.js";
 import { applyBrand } from "./applyBrand.js";
 import { reviseSectionCopy } from "./reviseSectionCopy.js";
@@ -34,6 +35,7 @@ export function createScopeForgeTools(deps: ToolDeps): AgentTool[] {
     renderProposalPreview(resolved),
     renderProposalPdf(resolved),
     askForMissingInputs(resolved),
+    ingestSourceMaterial(resolved),
     switchTemplate(resolved),
     applyBrand(resolved),
     reviseSectionCopy(resolved),
@@ -51,6 +53,7 @@ export {
   renderProposalPreview,
   renderProposalPdf,
   askForMissingInputs,
+  ingestSourceMaterial,
   switchTemplate,
   applyBrand,
   reviseSectionCopy,

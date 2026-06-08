@@ -14,6 +14,12 @@ function toolMap(session: AgentSession): Map<string, AgentTool> {
   return map;
 }
 
+function requireTool(tools: Map<string, AgentTool>, name: string): AgentTool {
+  const tool = tools.get(name);
+  if (tool === undefined) throw new Error(`Tool not found: ${name}`);
+  return tool;
+}
+
 const ctx: ToolContext = {
   signal: new AbortController().signal,
   toolCallId: "call-1",
@@ -59,10 +65,8 @@ describe("proposal agent tools", () => {
   it("set_project_inputs writes workstreams and tiers onto the draft", async () => {
     const session = newSession();
     const tools = toolMap(session);
-    const setProjectInputs = tools.get("set_project_inputs");
-    expect(setProjectInputs).toBeDefined();
 
-    const result = await run(setProjectInputs!, projectInputs);
+    const result = await run(requireTool(tools, "set_project_inputs"), projectInputs);
     const project = session.store.current.project;
     expect(project.cost.workstreams).toHaveLength(2);
     expect(project.pricing.tiers[0]?.price).toBe(40000);
@@ -74,11 +78,11 @@ describe("proposal agent tools", () => {
     const session = newSession();
     const tools = toolMap(session);
 
-    await run(tools.get("patch_prepared_for")!, {
+    await run(requireTool(tools, "patch_prepared_for"), {
       companyName: "Acme Operations",
       buyerName: "Riley Chen",
     });
-    await run(tools.get("patch_details")!, {
+    await run(requireTool(tools, "patch_details"), {
       title: "Operations AI Pilot",
       recommendation: "Start with a scoped pilot.",
     });
@@ -91,11 +95,13 @@ describe("proposal agent tools", () => {
   it("run_analysis is deterministic for identical inputs", async () => {
     const sessionA = newSession();
     const sessionB = newSession();
-    await run(toolMap(sessionA).get("set_project_inputs")!, projectInputs);
-    await run(toolMap(sessionB).get("set_project_inputs")!, projectInputs);
+    const toolsA = toolMap(sessionA);
+    const toolsB = toolMap(sessionB);
+    await run(requireTool(toolsA, "set_project_inputs"), projectInputs);
+    await run(requireTool(toolsB, "set_project_inputs"), projectInputs);
 
-    const resultA = await run(toolMap(sessionA).get("run_analysis")!, {});
-    const resultB = await run(toolMap(sessionB).get("run_analysis")!, {});
+    const resultA = await run(requireTool(toolsA, "run_analysis"), {});
+    const resultB = await run(requireTool(toolsB, "run_analysis"), {});
 
     expect(resultA.content).toEqual(resultB.content);
     expect(snapshot(resultA).economics?.leadPrice).toBe(40000);
@@ -106,21 +112,44 @@ describe("proposal agent tools", () => {
 
   it("run_analysis refuses before workstreams are set", async () => {
     const session = newSession();
-    const result = await run(toolMap(session).get("run_analysis")!, {});
+    const result = await run(requireTool(toolMap(session), "run_analysis"), {});
     expect(result.content).toContain("no cost workstreams");
     expect(snapshot(result).economics).toBeNull();
+  });
+
+  it("ingest_source_material applies observed fields without inventing workstreams", async () => {
+    const session = newSession();
+    const result = await run(requireTool(toolMap(session), "ingest_source_material"), {
+      sourceKind: "meeting_notes",
+      sourceName: "Discovery notes",
+      applySafePatch: true,
+      material: [
+        "Client: Acme Operations",
+        "Buyer: Riley Chen, COO",
+        "Systems: Power BI, Monday",
+        "Pain points: manual reconciliation",
+        "Scope: reporting data layer",
+        "Budget: $40k pilot",
+      ].join("\n"),
+    });
+
+    expect(result.content).toContain("Applied safe observed fields");
+    expect(result.content).toContain("Blended rate and target margin");
+    expect(session.store.current.preparedFor.companyName).toBe("Acme Operations");
+    expect(session.store.current.preparedFor.buyerTitle).toBe("COO");
+    expect(session.store.current.project.cost.workstreams).toHaveLength(0);
   });
 
   it("validate_draft reports issues until the draft is complete", async () => {
     const session = newSession();
     const tools = toolMap(session);
 
-    const before = await run(tools.get("validate_draft")!, {});
+    const before = await run(requireTool(tools, "validate_draft"), {});
     expect(snapshot(before).validation.ok).toBe(false);
 
-    await run(tools.get("set_project_inputs")!, projectInputs);
-    await run(tools.get("patch_prepared_for")!, { companyName: "Acme Operations" });
-    const after = await run(tools.get("validate_draft")!, {});
+    await run(requireTool(tools, "set_project_inputs"), projectInputs);
+    await run(requireTool(tools, "patch_prepared_for"), { companyName: "Acme Operations" });
+    const after = await run(requireTool(tools, "validate_draft"), {});
     expect(snapshot(after).validation).toBeDefined();
   });
 });

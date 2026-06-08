@@ -2,6 +2,7 @@ import { AlertTriangle, MessagesSquare } from "lucide-react";
 import { MessageList } from "./MessageList.js";
 import { Composer } from "./Composer.js";
 import { Starters } from "./Starters.js";
+import { SourceMaterialBox, buildSourceMaterialAgentPrompt } from "../ingest/SourceMaterialBox.js";
 import type { AgentStreamApi } from "./useAgentStream.js";
 import type { ProposalBrand } from "../../proposal/types.js";
 
@@ -68,6 +69,12 @@ export function ChatPanel({
           <MessageList messages={agent.messages} />
         )}
       </div>
+      <SourceMaterialBox
+        disabled={busy || !agentEnabled}
+        onIngested={(result) =>
+          void agent.send(buildSourceMaterialAgentPrompt(result), sendOptions)
+        }
+      />
       <Composer
         onSend={(message) => void agent.send(message, sendOptions)}
         onStop={agent.stop}

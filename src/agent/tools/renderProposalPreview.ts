@@ -2,7 +2,11 @@ import { z } from "zod";
 import { BUILT_IN_BRANDS } from "../../proposal/brands.js";
 import type { ProposalAudience } from "../../proposal/types.js";
 import { renderValueProposalHtml } from "../../render/valueProposalHtml.js";
-import { buildSessionSnapshot, resolveSessionVendorBrand, type AgentSession } from "../session.node.js";
+import {
+  buildSessionSnapshot,
+  resolveSessionVendorBrand,
+  type AgentSession,
+} from "../session.node.js";
 import { defineTool, type ResolvedToolDeps } from "./shared.js";
 
 function resolveBrand(session: AgentSession) {

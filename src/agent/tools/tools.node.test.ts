@@ -96,6 +96,7 @@ describe("createScopeForgeTools", () => {
         "render_proposal_preview",
         "render_proposal_pdf",
         "ask_for_missing_inputs",
+        "ingest_source_material",
         "switch_template",
         "apply_brand",
         "revise_section_copy",
@@ -223,6 +224,32 @@ describe("ask_for_missing_inputs", () => {
     expect(empty.content).toContain("Still needed");
     const complete = await run(toolset(seededSession()), "ask_for_missing_inputs");
     expect(complete.content).toContain("Nothing is missing");
+  });
+});
+
+describe("ingest_source_material", () => {
+  it("applies only safe observed fields and lists economic gaps", async () => {
+    const session = emptySession();
+    const result = await run(toolset(session), "ingest_source_material", {
+      sourceKind: "meeting_notes",
+      sourceName: "Discovery notes",
+      applySafePatch: true,
+      material: [
+        "Client: Acme Operations",
+        "Buyer: Riley Chen, COO",
+        "Systems: Power BI, Monday",
+        "Pain points: manual reconciliation",
+        "Scope: reporting data layer",
+        "Budget: $40k pilot",
+      ].join("\n"),
+    });
+
+    expect(result.content).toContain("Applied safe observed fields");
+    expect(result.content).toContain("Blended rate and target margin");
+    expect(session.store.current.preparedFor.companyName).toBe("Acme Operations");
+    expect(session.store.current.preparedFor.buyerTitle).toBe("COO");
+    expect(session.store.current.project.cost.workstreams).toHaveLength(0);
+    expect((result.details as { sourceMaterial?: unknown }).sourceMaterial).toBeDefined();
   });
 });
 

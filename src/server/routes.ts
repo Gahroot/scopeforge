@@ -18,6 +18,16 @@ import {
 } from "../core/index.js";
 import { validateProject } from "../data/schema.js";
 import {
+  MAX_SOURCE_MATERIAL_BASE64_CHARS,
+  MAX_SOURCE_MATERIAL_FILE_BYTES,
+  MAX_SOURCE_MATERIAL_TEXT_CHARS,
+  createProposalDraftCandidate,
+  extractSourceMaterialFromFile,
+  extractSourceMaterialFromText,
+  isSourceMaterialKind,
+  type SourceMaterialKind,
+} from "../ingest/index.js";
+import {
   createProposalAuthorMetadata,
   getCurrentProjectVersion,
   toProposalProjectId,
@@ -279,6 +289,9 @@ export async function handleApiRoute(
     return healthResponse(dependencies.agentSummary);
   }
   if (request.method === "GET" && pathname === "/api/brands") return brandsResponse();
+  if (request.method === "POST" && pathname === "/api/source-material/ingest") {
+    return ingestSourceMaterialResponse(request.body);
+  }
 
   const proposalProjectRoute = parseProposalProjectRoute(pathname);
   if (proposalProjectRoute !== null) {
@@ -1945,6 +1958,7 @@ function healthResponse(agentSummary?: AgentConfigSummary): ApiRouteResponse {
       "proposalProject.previewLatest",
       "proposalProject.exportLatestPdf",
       "proposalProject.importWebsiteBrand",
+      "sourceMaterial.ingest",
       "brand.listBuiltIns",
       "brand.validate",
       "brand.extractWebsite",
@@ -1959,6 +1973,241 @@ function brandsResponse(): ApiRouteResponse {
     ok: true,
     brands: ["nolan", "partners"].map((brandId) => resolveBrand(brandId)),
   });
+}
+
+interface SourceMaterialRouteFileInput {
+  readonly name?: string;
+  readonly mediaType?: string;
+  readonly base64: string;
+}
+
+function ingestSourceMaterialResponse(input: unknown): ApiRouteResponse {
+  const request = resolveSourceMaterialIngestInput(input);
+  if (!request.ok) return request.response;
+
+  const fileSourceName = request.value.file?.name ?? request.value.sourceName;
+  const extracted =
+    request.value.file === undefined
+      ? extractSourceMaterialFromText({
+          text: request.value.text,
+          ...(request.value.sourceKind === undefined
+            ? {}
+            : { sourceKind: request.value.sourceKind }),
+          ...(request.value.sourceName === undefined
+            ? {}
+            : { sourceName: request.value.sourceName }),
+          origin: "paste",
+          maxTextCharacters: MAX_SOURCE_MATERIAL_TEXT_CHARS,
+        })
+      : extractSourceMaterialFromFile({
+          bytes: request.value.file.bytes,
+          ...(fileSourceName === undefined ? {} : { fileName: fileSourceName }),
+          ...(request.value.file.mediaType === undefined
+            ? {}
+            : { mediaType: request.value.file.mediaType }),
+          ...(request.value.sourceKind === undefined
+            ? {}
+            : { sourceKind: request.value.sourceKind }),
+          maxBytes: MAX_SOURCE_MATERIAL_FILE_BYTES,
+          maxTextCharacters: MAX_SOURCE_MATERIAL_TEXT_CHARS,
+        });
+
+  if (!extracted.ok) return sourceMaterialFailureResponse(extracted.error);
+  const candidate = createProposalDraftCandidate(extracted.document);
+  return jsonResponse(200, {
+    ok: true,
+    document: extracted.document,
+    candidate,
+    limits: {
+      maxFileBytes: MAX_SOURCE_MATERIAL_FILE_BYTES,
+      maxBase64Characters: MAX_SOURCE_MATERIAL_BASE64_CHARS,
+      maxTextCharacters: MAX_SOURCE_MATERIAL_TEXT_CHARS,
+    },
+  });
+}
+
+interface ResolvedSourceMaterialFile {
+  readonly name?: string;
+  readonly mediaType?: string;
+  readonly bytes: Uint8Array;
+}
+
+interface ResolvedSourceMaterialIngestInput {
+  readonly text: string;
+  readonly sourceKind?: SourceMaterialKind;
+  readonly sourceName?: string;
+  readonly file?: ResolvedSourceMaterialFile;
+}
+
+function resolveSourceMaterialIngestInput(
+  input: unknown,
+): RouteValueResult<ResolvedSourceMaterialIngestInput> {
+  if (!isRecord(input)) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "source_material_request_invalid",
+        "Source material request body must be a JSON object with text or file.",
+      ),
+    );
+  }
+
+  const sourceKind = resolveOptionalSourceMaterialKind(input.sourceKind);
+  if (!sourceKind.ok) return sourceKind;
+
+  const sourceName = readOptionalRouteString(
+    input,
+    "sourceName",
+    "source_name_invalid",
+    "sourceName",
+  );
+  if (!sourceName.ok) return sourceName;
+
+  const rawText = input.text;
+  const rawFile = input.file;
+  const hasText = typeof rawText === "string" && rawText.trim().length > 0;
+  const hasFile = rawFile !== undefined;
+  if (hasText === hasFile) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "source_material_input_invalid",
+        "Provide exactly one of text or file for source material ingestion.",
+      ),
+    );
+  }
+
+  if (hasText) {
+    return {
+      ok: true,
+      value: {
+        text: rawText,
+        ...(sourceKind.value === undefined ? {} : { sourceKind: sourceKind.value }),
+        ...(sourceName.value === undefined ? {} : { sourceName: sourceName.value }),
+      },
+    };
+  }
+
+  const file = resolveSourceMaterialFile(rawFile);
+  if (!file.ok) return file;
+  return {
+    ok: true,
+    value: {
+      text: "",
+      ...(sourceKind.value === undefined ? {} : { sourceKind: sourceKind.value }),
+      ...(sourceName.value === undefined ? {} : { sourceName: sourceName.value }),
+      file: file.value,
+    },
+  };
+}
+
+function resolveOptionalSourceMaterialKind(
+  input: unknown,
+): RouteValueResult<SourceMaterialKind | undefined> {
+  if (input === undefined) return { ok: true, value: undefined };
+  if (isSourceMaterialKind(input)) return { ok: true, value: input };
+  return routeFailure(
+    failureResponse(
+      400,
+      "source_kind_invalid",
+      "sourceKind must be one of meeting_notes, transcript_summary, text, json, or pdf.",
+    ),
+  );
+}
+
+function resolveSourceMaterialFile(input: unknown): RouteValueResult<ResolvedSourceMaterialFile> {
+  if (!isRecord(input)) {
+    return routeFailure(
+      failureResponse(400, "source_file_invalid", "file must be an object with base64 content."),
+    );
+  }
+
+  const file = readSourceMaterialRouteFile(input);
+  if (!file.ok) return file;
+  const decoded = decodeRouteBase64(file.value.base64);
+  if (!decoded.ok) return decoded;
+
+  return {
+    ok: true,
+    value: {
+      bytes: decoded.value,
+      ...(file.value.name === undefined ? {} : { name: file.value.name }),
+      ...(file.value.mediaType === undefined ? {} : { mediaType: file.value.mediaType }),
+    },
+  };
+}
+
+function readSourceMaterialRouteFile(
+  input: Readonly<Record<string, unknown>>,
+): RouteValueResult<SourceMaterialRouteFileInput> {
+  const rawBase64 = input.base64;
+  if (typeof rawBase64 !== "string" || rawBase64.trim().length === 0) {
+    return routeFailure(
+      failureResponse(400, "source_file_base64_invalid", "file.base64 must be a non-empty string."),
+    );
+  }
+
+  const name = readOptionalRouteString(input, "name", "source_file_name_invalid", "file.name");
+  if (!name.ok) return name;
+  const mediaType = readOptionalRouteString(
+    input,
+    "mediaType",
+    "source_file_media_type_invalid",
+    "file.mediaType",
+  );
+  if (!mediaType.ok) return mediaType;
+
+  return {
+    ok: true,
+    value: {
+      base64: rawBase64,
+      ...(name.value === undefined ? {} : { name: name.value }),
+      ...(mediaType.value === undefined ? {} : { mediaType: mediaType.value }),
+    },
+  };
+}
+
+function decodeRouteBase64(input: string): RouteValueResult<Uint8Array> {
+  const normalized = input.replace(/\s+/g, "");
+  if (normalized.length > MAX_SOURCE_MATERIAL_BASE64_CHARS) {
+    return routeFailure(
+      failureResponse(
+        413,
+        "source_material_too_large",
+        `Source material file payload must be ${MAX_SOURCE_MATERIAL_BASE64_CHARS} base64 characters or fewer.`,
+        [`receivedBase64Characters: ${normalized.length}`],
+      ),
+    );
+  }
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) {
+    return routeFailure(
+      failureResponse(400, "source_file_base64_invalid", "file.base64 is not valid base64."),
+    );
+  }
+  const bytes = Buffer.from(normalized, "base64");
+  if (bytes.byteLength === 0) {
+    return routeFailure(
+      failureResponse(400, "source_file_base64_invalid", "file.base64 decoded to zero bytes."),
+    );
+  }
+  return { ok: true, value: bytes };
+}
+
+function sourceMaterialFailureResponse(error: {
+  readonly code: string;
+  readonly message: string;
+  readonly details?: readonly string[];
+}): ApiRouteResponse {
+  switch (error.code) {
+    case "source_material_too_large":
+      return failureResponse(413, error.code, error.message, error.details);
+    case "source_material_unsupported":
+      return failureResponse(415, error.code, error.message, error.details);
+    case "source_material_pdf_unreadable":
+      return failureResponse(422, error.code, error.message, error.details);
+    default:
+      return failureResponse(400, error.code, error.message, error.details);
+  }
 }
 
 function validateBrandResponse(input: unknown): ApiRouteResponse {

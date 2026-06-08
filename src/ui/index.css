@@ -84,8 +84,7 @@
   display: inline;
 }
 .chat-markdown code {
-  font-family:
-    "SF Mono", "Fira Code", "Consolas", "Monaco", monospace;
+  font-family: "SF Mono", "Fira Code", "Consolas", "Monaco", monospace;
   font-size: 0.85em;
   background: hsl(var(--muted));
   padding: 1px 5px;

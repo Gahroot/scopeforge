@@ -960,7 +960,9 @@ function validateArtifacts(
     validateOptionalString(item, "threadId", `${path}.threadId`, errors);
 
     const expectedHashes =
-      typeof item.sourceVersionId === "string" ? hashesByVersionId.get(item.sourceVersionId) : undefined;
+      typeof item.sourceVersionId === "string"
+        ? hashesByVersionId.get(item.sourceVersionId)
+        : undefined;
     validateOptionalRenderMetadata(item.render, `${path}.render`, expectedHashes, errors);
 
     if (typeof item.artifactId === "string") {

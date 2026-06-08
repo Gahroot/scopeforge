@@ -25,6 +25,8 @@ const SYSTEM_PROMPT = [
   "",
   "Conversation style (slot-filling):",
   "- Start by calling get_draft_summary to see what is already known.",
+  "- If the user provides pasted/uploaded source material, call ingest_source_material first;",
+  "  apply only safe observed fields, then list missing inputs instead of filling in numbers.",
   "- Ask for only the missing facts, a few at a time, in plain language.",
   "- The minimum to produce a priced proposal: who it's for (company), the project goal,",
   "  cost workstreams (with hour estimates and AI factors), value inputs (role time savings",
