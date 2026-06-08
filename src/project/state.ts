@@ -84,6 +84,8 @@ const ARTIFACT_ORIGINS = [
   "system",
 ] as const satisfies readonly ProposalArtifactOrigin[];
 
+const ARTIFACT_RENDER_AUDIENCES = ["client", "internal"] as const;
+
 const PDF_SOURCE_FIELD_NAMES = ["pdf", "pdfUrl", "pdfBytes", "renderedPdf", "sourcePdf"] as const;
 
 interface CreateProposalAuthorMetadataInput {
@@ -409,6 +411,7 @@ export function addProposalArtifact(
     ...(input.mimeType === undefined ? {} : { mimeType: input.mimeType }),
     ...(input.bytes === undefined ? {} : { bytes: input.bytes }),
     ...(input.artifactHash === undefined ? {} : { artifactHash: input.artifactHash }),
+    ...(input.render === undefined ? {} : { render: input.render }),
     ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
   } satisfies ProposalArtifactMetadata;
 
@@ -476,7 +479,7 @@ export function validateProposalProject(
 
 interface ProjectVersionIndex {
   readonly versionIds: ReadonlySet<string>;
-  readonly hashesByVersionId: ReadonlyMap<string, string>;
+  readonly hashesByVersionId: ReadonlyMap<string, ProposalProjectVersionHashes>;
 }
 
 interface CreateProjectVersionInternalInput {
@@ -542,7 +545,7 @@ function validateProjectVersions(
   errors: ProposalProjectValidationError[],
 ): ProjectVersionIndex {
   const versionIds = new Set<string>();
-  const hashesByVersionId = new Map<string, string>();
+  const hashesByVersionId = new Map<string, ProposalProjectVersionHashes>();
   const versionNumbers = new Set<number>();
 
   if (!Array.isArray(input)) {
@@ -572,7 +575,7 @@ function validateProjectVersions(
       );
     }
     versionNumbers.add(versionId.versionNumber);
-    hashesByVersionId.set(versionId.id, versionId.sourceHash);
+    hashesByVersionId.set(versionId.id, versionId.hashes);
   });
 
   input.forEach((item, index) => {
@@ -590,7 +593,7 @@ function validateProjectVersions(
 interface ValidatedVersionReference {
   readonly id: string;
   readonly versionNumber: number;
-  readonly sourceHash: string;
+  readonly hashes: ProposalProjectVersionHashes;
 }
 
 function validateProjectVersion(
@@ -624,35 +627,46 @@ function validateProjectVersion(
   );
   validateVersionHashes(input.hashes, `${path}.hashes`, errors);
 
-  if (sourceOfTruthValid && isRecord(input.hashes)) {
-    const expected = hashProposalSourceOfTruth(input.sourceOfTruth as ProposalProjectSourceOfTruth);
-    compareHash(input.hashes.draftHash, expected.draftHash, `${path}.hashes.draftHash`, errors);
+  const expectedHashes = sourceOfTruthValid
+    ? hashProposalSourceOfTruth(input.sourceOfTruth as ProposalProjectSourceOfTruth)
+    : null;
+  if (expectedHashes !== null && isRecord(input.hashes)) {
+    compareHash(
+      input.hashes.draftHash,
+      expectedHashes.draftHash,
+      `${path}.hashes.draftHash`,
+      errors,
+    );
     compareHash(
       input.hashes.vendorBrandHash,
-      expected.vendorBrandHash,
+      expectedHashes.vendorBrandHash,
       `${path}.hashes.vendorBrandHash`,
       errors,
     );
     compareHash(
       input.hashes.clientBrandHash,
-      expected.clientBrandHash,
+      expectedHashes.clientBrandHash,
       `${path}.hashes.clientBrandHash`,
       errors,
     );
-    compareHash(input.hashes.sourceHash, expected.sourceHash, `${path}.hashes.sourceHash`, errors);
+    compareHash(
+      input.hashes.sourceHash,
+      expectedHashes.sourceHash,
+      `${path}.hashes.sourceHash`,
+      errors,
+    );
   }
 
   if (
     typeof input.versionId === "string" &&
     typeof input.versionNumber === "number" &&
     Number.isInteger(input.versionNumber) &&
-    isRecord(input.hashes) &&
-    typeof input.hashes.sourceHash === "string"
+    expectedHashes !== null
   ) {
     return {
       id: input.versionId,
       versionNumber: input.versionNumber,
-      sourceHash: input.hashes.sourceHash,
+      hashes: expectedHashes,
     } satisfies ValidatedVersionReference;
   }
 
@@ -910,7 +924,7 @@ function validateArray(
 
 function validateArtifacts(
   input: unknown,
-  hashesByVersionId: ReadonlyMap<string, string>,
+  hashesByVersionId: ReadonlyMap<string, ProposalProjectVersionHashes>,
   errors: ProposalProjectValidationError[],
 ): ReadonlySet<string> {
   const artifactIds = new Set<string>();
@@ -945,6 +959,10 @@ function validateArtifacts(
     validateOptionalHash(item.artifactHash, `${path}.artifactHash`, errors);
     validateOptionalString(item, "threadId", `${path}.threadId`, errors);
 
+    const expectedHashes =
+      typeof item.sourceVersionId === "string" ? hashesByVersionId.get(item.sourceVersionId) : undefined;
+    validateOptionalRenderMetadata(item.render, `${path}.render`, expectedHashes, errors);
+
     if (typeof item.artifactId === "string") {
       if (artifactIds.has(item.artifactId)) {
         addError(errors, `${path}.artifactId`, "Artifact id must be unique.");
@@ -953,13 +971,12 @@ function validateArtifacts(
     }
 
     if (typeof item.sourceVersionId === "string") {
-      const expectedSourceHash = hashesByVersionId.get(item.sourceVersionId);
-      if (expectedSourceHash === undefined) {
+      if (expectedHashes === undefined) {
         addError(errors, `${path}.sourceVersionId`, "Artifact source version must exist.");
       } else {
         compareHash(
           item.sourceVersionHash,
-          expectedSourceHash,
+          expectedHashes.sourceHash,
           `${path}.sourceVersionHash`,
           errors,
         );
@@ -968,6 +985,60 @@ function validateArtifacts(
   });
 
   return artifactIds;
+}
+
+function validateOptionalRenderMetadata(
+  input: unknown,
+  path: string,
+  expectedHashes: ProposalProjectVersionHashes | undefined,
+  errors: ProposalProjectValidationError[],
+): void {
+  if (input === undefined) return;
+  if (!isRecord(input)) {
+    addError(errors, path, "Artifact render metadata must be an object when provided.");
+    return;
+  }
+
+  validateRequiredString(input, "renderer", `${path}.renderer`, errors);
+  validateNumber(input.rendererVersion, `${path}.rendererVersion`, errors, {
+    integer: true,
+    minInclusive: 1,
+    label: "Renderer version",
+  });
+  validateEnum(input.audience, `${path}.audience`, ARTIFACT_RENDER_AUDIENCES, "Audience", errors);
+  validateRequiredString(input, "templateId", `${path}.templateId`, errors);
+  validateNumber(input.analysisSeed, `${path}.analysisSeed`, errors, {
+    integer: true,
+    minInclusive: 1,
+    label: "Analysis seed",
+  });
+  validateNumber(input.analysisIterations, `${path}.analysisIterations`, errors, {
+    integer: true,
+    minInclusive: 1,
+    label: "Analysis iterations",
+  });
+  validateHash(input.draftHash, `${path}.draftHash`, errors);
+  validateHash(input.vendorBrandHash, `${path}.vendorBrandHash`, errors);
+  validateHash(input.clientBrandHash, `${path}.clientBrandHash`, errors);
+  validateHash(input.sourceHash, `${path}.sourceHash`, errors);
+  validateOptionalString(input, "generatedAt", `${path}.generatedAt`, errors);
+  validateOptionalString(input, "format", `${path}.format`, errors);
+
+  if (expectedHashes === undefined) return;
+  compareHash(input.draftHash, expectedHashes.draftHash, `${path}.draftHash`, errors);
+  compareHash(
+    input.vendorBrandHash,
+    expectedHashes.vendorBrandHash,
+    `${path}.vendorBrandHash`,
+    errors,
+  );
+  compareHash(
+    input.clientBrandHash,
+    expectedHashes.clientBrandHash,
+    `${path}.clientBrandHash`,
+    errors,
+  );
+  compareHash(input.sourceHash, expectedHashes.sourceHash, `${path}.sourceHash`, errors);
 }
 
 function validateAgentThreads(

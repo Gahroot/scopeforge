@@ -1,19 +1,23 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
+  addProposalArtifact,
   canonicalJson,
   commitProposalProjectVersion,
   createProposalProject,
+  toContentHash,
   toProposalProjectId,
   toProposalProjectVersionId,
   validateProposalProject,
 } from "./state.js";
 import type {
+  AddProposalArtifactInput,
   CommitProposalProjectVersionInput,
   CreateProposalProjectInput,
   ProposalAuthorMetadata,
+  ProposalArtifactMetadata,
   ProposalProject,
   ProposalProjectId,
   ProposalProjectStatus,
@@ -24,6 +28,7 @@ import type {
 export const DEFAULT_LOCAL_PROJECT_DATA_DIR = ".scopeforge/proposal-projects";
 export const PROJECT_RECORD_FILE_NAME = "project.json";
 export const PROJECT_VERSIONS_DIRECTORY_NAME = "versions";
+export const PROJECT_ARTIFACTS_DIRECTORY_NAME = "artifacts";
 const PROJECT_LOCK_FILE_NAME = ".project.lock";
 const PROJECT_LOCK_RETRY_MS = 25;
 const PROJECT_LOCK_TIMEOUT_MS = 5_000;
@@ -130,6 +135,20 @@ export type ProposalProjectStoreLoadResult =
       readonly errors: readonly ProposalProjectStoreLoadError[];
     };
 
+export interface SaveProposalProjectArtifactInput
+  extends Omit<AddProposalArtifactInput, "artifactHash" | "bytes" | "uri"> {
+  readonly content: string | Uint8Array;
+  readonly expectedCurrentVersionId?: ProposalProjectVersionId;
+}
+
+export interface SaveProposalProjectArtifactResult {
+  readonly project: ProposalProject;
+  readonly artifact: ProposalArtifactMetadata;
+  readonly path: string;
+  readonly relativePath: string;
+  readonly bytes: number;
+}
+
 export class LocalProposalProjectStore {
   readonly dataDir: string;
   private readonly now: ProposalProjectStoreNow;
@@ -213,20 +232,24 @@ export class LocalProposalProjectStore {
     }
 
     return this.withProjectLock(projectId, async () => {
+      const parentVersionId = input.parentVersionId;
+      if (parentVersionId === undefined) {
+        throw new ProposalProjectBaseVersionRequiredError(projectId);
+      }
+
       const persistedProject = await this.readPersistedProject(projectId);
       const project = persistedProject ?? cachedProject;
       if (persistedProject !== null) {
         this.projectsById.set(projectId, cloneProject(persistedProject));
       }
-      if (project.currentVersionId !== input.parentVersionId) {
+      if (project.currentVersionId !== parentVersionId) {
         throw new ProposalProjectVersionConflictError({
           project,
-          providedBaseVersionId: input.parentVersionId,
+          providedBaseVersionId: parentVersionId,
         });
       }
 
       const createdAt = input.createdAt ?? toIsoString(this.now());
-      const parentVersionId = input.parentVersionId;
       const versionNumber = nextVersionNumber(project);
       const versionId =
         input.versionId ??
@@ -243,6 +266,68 @@ export class LocalProposalProjectStore {
         versionId,
       });
       return this.save(updated);
+    });
+  }
+
+  async saveArtifact(
+    projectId: ProposalProjectId,
+    input: SaveProposalProjectArtifactInput,
+  ): Promise<SaveProposalProjectArtifactResult | null> {
+    const cachedProject = this.projectsById.get(projectId);
+    if (cachedProject === undefined) return null;
+
+    return this.withProjectLock(projectId, async () => {
+      const persistedProject = await this.readPersistedProject(projectId);
+      const project = persistedProject ?? cachedProject;
+      if (persistedProject !== null) {
+        this.projectsById.set(projectId, cloneProject(persistedProject));
+      }
+      if (
+        input.expectedCurrentVersionId !== undefined &&
+        project.currentVersionId !== input.expectedCurrentVersionId
+      ) {
+        throw new ProposalProjectVersionConflictError({
+          project,
+          providedBaseVersionId: input.expectedCurrentVersionId,
+        });
+      }
+
+      const sourceVersionId = input.sourceVersionId ?? project.currentVersionId;
+      const sourceVersion = project.versions.find((version) => version.versionId === sourceVersionId);
+      if (sourceVersion === undefined) {
+        throw new Error(`Cannot save proposal artifact for missing version ${sourceVersionId}.`);
+      }
+
+      const content = artifactBytes(input.content);
+      const artifactHash = hashBytes(content);
+      const fileName = sanitizeArtifactFileName(input.fileName ?? defaultArtifactFileName(input.kind));
+      const relativePath = artifactRelativePath(project, sourceVersion, fileName);
+      const absolutePath = join(projectDirectory(this.dataDir, projectId), relativePath);
+      await writeImmutableBinaryFile(absolutePath, content);
+
+      const createdAt = input.createdAt ?? toIsoString(this.now());
+      const updated = addProposalArtifact(project, {
+        ...input,
+        sourceVersionId,
+        createdAt,
+        uri: relativePath,
+        fileName,
+        bytes: content.byteLength,
+        artifactHash,
+      });
+      const saved = await this.save(updated);
+      const artifact = saved.artifacts[saved.artifacts.length - 1];
+      if (artifact === undefined) {
+        throw new Error("Saved proposal project did not include the new artifact metadata.");
+      }
+
+      return {
+        project: saved,
+        artifact,
+        path: absolutePath,
+        relativePath,
+        bytes: content.byteLength,
+      } satisfies SaveProposalProjectArtifactResult;
     });
   }
 
@@ -319,6 +404,60 @@ export function isProposalProjectVersionConflictError(
 
 export function projectDirectory(dataDir: string, projectId: ProposalProjectId): string {
   return join(resolve(dataDir), encodePathSegment(projectId));
+}
+
+function artifactBytes(content: string | Uint8Array): Uint8Array {
+  return typeof content === "string" ? new TextEncoder().encode(content) : content;
+}
+
+function hashBytes(content: Uint8Array) {
+  const digest = createHash("sha256").update(content).digest("hex");
+  return toContentHash(`sha256:${digest}`);
+}
+
+function artifactRelativePath(
+  project: ProposalProject,
+  sourceVersion: ProposalProjectVersion,
+  fileName: string,
+): string {
+  const artifactNumber = String(project.artifacts.length + 1).padStart(6, "0");
+  return [
+    PROJECT_ARTIFACTS_DIRECTORY_NAME,
+    versionArtifactDirectoryName(sourceVersion),
+    `${artifactNumber}-${fileName}`,
+  ].join("/");
+}
+
+function versionArtifactDirectoryName(version: ProposalProjectVersion): string {
+  const paddedVersionNumber = String(version.versionNumber).padStart(6, "0");
+  return `${paddedVersionNumber}-${encodePathSegment(version.versionId)}`;
+}
+
+function defaultArtifactFileName(kind: AddProposalArtifactInput["kind"]): string {
+  switch (kind) {
+    case "proposal-pdf":
+      return "proposal.pdf";
+    case "proposal-html":
+    case "proposal-preview":
+      return "proposal.html";
+    case "draft-json-export":
+      return "draft.json";
+    case "brand-json-export":
+      return "brand.json";
+    case "analysis-json-export":
+      return "analysis.json";
+    case "attachment":
+      return "attachment.bin";
+  }
+}
+
+function sanitizeArtifactFileName(input: string): string {
+  const withoutPath = input.split(/[\\/]+/).at(-1) ?? "artifact.bin";
+  const normalized = withoutPath
+    .replace(/[^a-zA-Z0-9._ -]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (normalized.length === 0 ? "artifact.bin" : normalized).replace(/["\\]/g, "-");
 }
 
 function defaultNow(): Date {
@@ -557,6 +696,22 @@ async function writeJsonFileAtomic(path: string, value: unknown): Promise<void> 
       await rm(tempPath, { force: true }).catch(() => undefined);
     }
   }
+}
+
+async function writeImmutableBinaryFile(path: string, value: Uint8Array): Promise<void> {
+  const directory = dirname(path);
+  await ensureDirectory(directory);
+  const handle = await open(path, "wx");
+  let complete = false;
+  try {
+    await handle.writeFile(value);
+    await handle.sync();
+    complete = true;
+  } finally {
+    await handle.close().catch(() => undefined);
+    if (!complete) await rm(path, { force: true }).catch(() => undefined);
+  }
+  await syncDirectory(directory);
 }
 
 type ProjectLockRelease = () => Promise<void>;

@@ -1,7 +1,9 @@
 import type {
+  ProposalAudience,
   ProposalBrand,
   ProposalBrandColors,
   ProposalDraft,
+  ProposalDraftTemplateId,
   ProposalValidationError,
   ValidationResult,
 } from "../proposal/types.js";
@@ -127,6 +129,21 @@ export type ProposalArtifactKind =
 
 export type ProposalArtifactOrigin = "render" | "export" | "upload" | "agent" | "system";
 
+export interface ProposalArtifactRenderMetadata {
+  readonly renderer: string;
+  readonly rendererVersion: number;
+  readonly audience: ProposalAudience;
+  readonly templateId: ProposalDraftTemplateId;
+  readonly analysisSeed: number;
+  readonly analysisIterations: number;
+  readonly draftHash: ContentHash;
+  readonly vendorBrandHash: ContentHash;
+  readonly clientBrandHash: ContentHash;
+  readonly sourceHash: ContentHash;
+  readonly generatedAt?: string;
+  readonly format?: string;
+}
+
 export interface ProposalArtifactMetadata {
   readonly artifactId: ProposalArtifactId;
   readonly kind: ProposalArtifactKind;
@@ -143,6 +160,7 @@ export interface ProposalArtifactMetadata {
   readonly mimeType?: string;
   readonly bytes?: number;
   readonly artifactHash?: ContentHash;
+  readonly render?: ProposalArtifactRenderMetadata;
   readonly threadId?: DisposableAgentThreadId;
 }
 
@@ -232,6 +250,7 @@ export interface AddProposalArtifactInput {
   readonly mimeType?: string;
   readonly bytes?: number;
   readonly artifactHash?: ContentHash;
+  readonly render?: ProposalArtifactRenderMetadata;
   readonly threadId?: DisposableAgentThreadId;
 }
 

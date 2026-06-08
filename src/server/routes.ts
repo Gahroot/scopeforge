@@ -10,7 +10,7 @@ import type {
 } from "../brand/types.js";
 import type { AgentConfigSummary } from "../agent/config.node.js";
 import { logError, logEvent } from "../diagnostics/logger.node.js";
-import { analyzeProject, type AnalyzeOptions, type Project } from "../core/index.js";
+import { analyzeProject, DEFAULT_ITERATIONS, type AnalyzeOptions, type Project } from "../core/index.js";
 import { validateProject } from "../data/schema.js";
 import {
   createProposalAuthorMetadata,
@@ -25,10 +25,13 @@ import {
   type ProposalProjectConflictMetadata,
   type ProposalProjectListItem,
   type ProposalProjectStoreLoadResult,
+  type SaveProposalProjectArtifactInput,
+  type SaveProposalProjectArtifactResult,
 } from "../project/store.node.js";
 import type {
   CommitProposalProjectVersionInput,
   CreateProposalProjectInput,
+  ProposalArtifactRenderMetadata,
   ProposalAuthorKind,
   ProposalAuthorMetadata,
   ProposalBrandExtractionProvenance,
@@ -70,6 +73,10 @@ const MAX_BRAND_REDIRECTS = 8;
 const MAX_BRAND_TIMEOUT_MS = 30_000;
 const DEFAULT_PDF_FORMAT = "Letter";
 const DEFAULT_TEMPLATE_ID = "generic/value-proposal" satisfies ProposalDraftTemplateId;
+const DEFAULT_ANALYSIS_SEED = 7;
+const PROJECT_HTML_RENDERER = "scopeforge.valueProposalHtml";
+const PROJECT_PDF_RENDERER = "scopeforge.proposalPdf";
+const PROJECT_RENDERER_VERSION = 1;
 const MAX_ITERATIONS = 250_000;
 const PROPOSAL_PROJECT_ROUTE_NAMES = ["proposal-projects", "projects"] as const;
 const PROPOSAL_PROJECT_STATUSES = [
@@ -171,6 +178,10 @@ export interface ProposalProjectStore {
     projectId: ProposalProjectId,
     input: CommitProposalProjectVersionInput,
   ) => Promise<ProposalProject | null>;
+  readonly saveArtifact: (
+    projectId: ProposalProjectId,
+    input: SaveProposalProjectArtifactInput,
+  ) => Promise<SaveProposalProjectArtifactResult | null>;
 }
 
 export interface AppRouteDependencies {
@@ -747,6 +758,33 @@ async function previewLatestProposalProjectResponse(
     );
   }
 
+  const createdBy = resolveProjectActionAuthor(input);
+  if (!createdBy.ok) return createdBy.response;
+
+  const artifact = await saveProjectRenderArtifact(
+    loaded.value.store,
+    loaded.value.project.projectId,
+    {
+      kind: "proposal-preview",
+      origin: "render",
+      content: bundle.value.html,
+      createdBy: createdBy.value,
+      sourceVersionId: currentVersion.value.versionId,
+      expectedCurrentVersionId: currentVersion.value.versionId,
+      fileName: sanitizeHtmlFileName(
+        readOptionalString(input, "fileName") ??
+          `${bundle.value.proposal.intake.preparedFor.companyName}-proposal-preview.html`,
+      ),
+      mimeType: "text/html; charset=utf-8",
+      label: `HTML preview for project version ${currentVersion.value.versionNumber}`,
+      render: buildProjectArtifactRenderMetadata(currentVersion.value, bundle.value, {
+        renderer: PROJECT_HTML_RENDERER,
+      }),
+    },
+    "preview",
+  );
+  if (!artifact.ok) return artifact.response;
+
   return jsonResponse(200, {
     ok: true,
     projectId: loaded.value.project.projectId,
@@ -758,6 +796,8 @@ async function previewLatestProposalProjectResponse(
     analysis,
     warnings: analysis.warnings,
     html: bundle.value.html,
+    artifact: artifact.value.artifact,
+    project: artifact.value.project,
   });
 }
 
@@ -794,11 +834,15 @@ async function exportLatestProposalProjectPdfResponse(
     );
   }
 
+  const createdBy = resolveProjectActionAuthor(input);
+  if (!createdBy.ok) return createdBy.response;
+
   const format = readOptionalString(input, "format") ?? DEFAULT_PDF_FORMAT;
   const fileName = sanitizePdfFileName(
     readOptionalString(input, "fileName") ??
       `${bundle.value.proposal.intake.preparedFor.companyName}-proposal.pdf`,
   );
+  const htmlFileName = pdfFileNameToHtmlFileName(fileName);
   const renderPdf = dependencies.renderPdf ?? renderPdfWithPlaywright;
 
   try {
@@ -807,6 +851,49 @@ async function exportLatestProposalProjectPdfResponse(
       format,
       ...(signal === undefined ? {} : { signal }),
     });
+
+    const htmlArtifact = await saveProjectRenderArtifact(
+      loaded.value.store,
+      loaded.value.project.projectId,
+      {
+        kind: "proposal-html",
+        origin: "render",
+        content: bundle.value.html,
+        createdBy: createdBy.value,
+        sourceVersionId: currentVersion.value.versionId,
+        expectedCurrentVersionId: currentVersion.value.versionId,
+        fileName: htmlFileName,
+        mimeType: "text/html; charset=utf-8",
+        label: `Rendered HTML for project version ${currentVersion.value.versionNumber}`,
+        render: buildProjectArtifactRenderMetadata(currentVersion.value, bundle.value, {
+          renderer: PROJECT_HTML_RENDERER,
+        }),
+      },
+      "PDF export HTML render",
+    );
+    if (!htmlArtifact.ok) return htmlArtifact.response;
+
+    const pdfArtifact = await saveProjectRenderArtifact(
+      loaded.value.store,
+      loaded.value.project.projectId,
+      {
+        kind: "proposal-pdf",
+        origin: "render",
+        content: pdf.bytes,
+        createdBy: createdBy.value,
+        sourceVersionId: currentVersion.value.versionId,
+        expectedCurrentVersionId: currentVersion.value.versionId,
+        fileName,
+        mimeType: "application/pdf",
+        label: `PDF export for project version ${currentVersion.value.versionNumber}`,
+        render: buildProjectArtifactRenderMetadata(currentVersion.value, bundle.value, {
+          renderer: PROJECT_PDF_RENDERER,
+          format: pdf.format,
+        }),
+      },
+      "PDF export",
+    );
+    if (!pdfArtifact.ok) return pdfArtifact.response;
 
     return {
       kind: "binary",
@@ -817,6 +904,10 @@ async function exportLatestProposalProjectPdfResponse(
         "Content-Length": String(pdf.bytes.byteLength),
         "Content-Type": "application/pdf",
         "X-Content-Type-Options": "nosniff",
+        "X-ScopeForge-Html-Artifact-Id": htmlArtifact.value.artifact.artifactId,
+        "X-ScopeForge-Html-Artifact-Uri": htmlArtifact.value.artifact.uri,
+        "X-ScopeForge-Pdf-Artifact-Id": pdfArtifact.value.artifact.artifactId,
+        "X-ScopeForge-Pdf-Artifact-Uri": pdfArtifact.value.artifact.uri,
         "X-ScopeForge-Pdf-Format": pdf.format,
       },
       body: pdf.bytes,
@@ -830,6 +921,86 @@ async function exportLatestProposalProjectPdfResponse(
     });
     return pdfRenderFailureResponse(error);
   }
+}
+
+function resolveProjectActionAuthor(input: unknown): RouteValueResult<ProposalAuthorMetadata> {
+  return resolveProposalProjectAuthor(isRecord(input) ? input : {});
+}
+
+interface ProjectArtifactRenderMetadataInput {
+  readonly renderer: string;
+  readonly format?: string;
+}
+
+function buildProjectArtifactRenderMetadata(
+  version: ProposalProjectVersion,
+  bundle: ProposalRenderBundle,
+  input: ProjectArtifactRenderMetadataInput,
+): ProposalArtifactRenderMetadata {
+  const analysis = resolvedAnalysisMetadata(bundle.analysisOptions);
+  return {
+    renderer: input.renderer,
+    rendererVersion: PROJECT_RENDERER_VERSION,
+    audience: bundle.audience,
+    templateId: bundle.proposal.templateId,
+    analysisSeed: analysis.seed,
+    analysisIterations: analysis.iterations,
+    draftHash: version.hashes.draftHash,
+    vendorBrandHash: version.hashes.vendorBrandHash,
+    clientBrandHash: version.hashes.clientBrandHash,
+    sourceHash: version.hashes.sourceHash,
+    ...(bundle.generatedAt === undefined ? {} : { generatedAt: bundle.generatedAt.toISOString() }),
+    ...(input.format === undefined ? {} : { format: input.format }),
+  } satisfies ProposalArtifactRenderMetadata;
+}
+
+function resolvedAnalysisMetadata(options: AnalyzeOptions): {
+  readonly seed: number;
+  readonly iterations: number;
+} {
+  return {
+    seed: options.seed ?? DEFAULT_ANALYSIS_SEED,
+    iterations: options.iterations ?? DEFAULT_ITERATIONS,
+  };
+}
+
+async function saveProjectRenderArtifact(
+  store: ProposalProjectStore,
+  projectId: ProposalProjectId,
+  input: SaveProposalProjectArtifactInput,
+  actionLabel: string,
+): Promise<RouteValueResult<SaveProposalProjectArtifactResult>> {
+  try {
+    const saved = await store.saveArtifact(projectId, input);
+    if (saved === null) return routeFailure(proposalProjectNotFoundResponse(projectId));
+    return { ok: true, value: saved };
+  } catch (error) {
+    if (isProposalProjectVersionConflictError(error)) {
+      return routeFailure(
+        projectVersionConflictResponse({
+          providedBaseVersionId: error.providedBaseVersionId,
+          latestProject: error.latestProject,
+          retryInstruction: `Fetch the latest project state and retry ${actionLabel.toLowerCase()} against the current version.`,
+        }),
+      );
+    }
+    return routeFailure(projectStoreWriteFailureResponse("project_artifact_save_failed", error));
+  }
+}
+
+function sanitizeHtmlFileName(input: string): string {
+  const withoutPath = input.split(/[\\/]+/).at(-1) ?? "proposal.html";
+  const normalized = withoutPath
+    .replace(/[^a-zA-Z0-9._ -]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  const fallback = normalized.length === 0 ? "proposal.html" : normalized;
+  const withExtension = fallback.toLowerCase().endsWith(".html") ? fallback : `${fallback}.html`;
+  return withExtension.replace(/["\\]/g, "-");
+}
+
+function pdfFileNameToHtmlFileName(fileName: string): string {
+  return sanitizeHtmlFileName(fileName.replace(/\.pdf$/i, ".html"));
 }
 
 async function loadProposalProject(
@@ -1191,12 +1362,10 @@ function buildLatestProjectRenderInput(
   input: unknown,
 ): Readonly<Record<string, unknown>> {
   const requestInput = isRecord(input) ? input : {};
-  const requestedBrand =
-    readOptionalUnknown(requestInput, "brand") ?? readOptionalUnknown(requestInput, "brandId");
   return {
     ...requestInput,
     draft: version.sourceOfTruth.draft,
-    brand: requestedBrand ?? version.sourceOfTruth.vendorBrand,
+    brand: version.sourceOfTruth.vendorBrand,
   };
 }
 

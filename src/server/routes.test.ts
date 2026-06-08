@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acmeWebsiteHtml } from "../brand/fixtures/acmeWebsite.js";
@@ -12,6 +12,7 @@ import {
 } from "../project/state.js";
 import {
   createLocalProposalProjectStore,
+  projectDirectory,
   type LocalProposalProjectStore,
 } from "../project/store.node.js";
 import { BUILT_IN_BRANDS, validateProposalBrand } from "../proposal/brands.js";
@@ -489,6 +490,7 @@ describe("server API routes", () => {
           pathname: `/api/proposal-projects/${projectId}/preview`,
           body: {
             audience: "client",
+            brand: BUILT_IN_BRANDS.nolan,
             iterations: 500,
             generatedAt: "2026-06-07T00:00:00.000Z",
             baseVersionId: updatedVersionId,
@@ -502,6 +504,28 @@ describe("server API routes", () => {
       expect(previewJson.status).toBe(200);
       expect(readStringField(previewJson.body, "currentVersionId")).toBe(updatedVersionId);
       expect(previewHtml).toContain("Updated Operations AI Pilot");
+      expect(previewHtml).toContain("ScopeForge Partners");
+      expect(previewHtml).not.toContain("Nolan Grout");
+
+      const previewArtifact = readRecordField(previewJson.body, "artifact");
+      const previewRender = readRecordField(previewArtifact, "render");
+      expect(readStringField(previewArtifact, "kind")).toBe("proposal-preview");
+      expect(readStringField(previewArtifact, "sourceVersionId")).toBe(updatedVersionId);
+      expect(readStringField(previewArtifact, "uri")).toContain(
+        `artifacts/000002-${updatedVersionId}/`,
+      );
+      expect(readStringField(previewRender, "renderer")).toBe("scopeforge.valueProposalHtml");
+      expect(readStringField(previewRender, "audience")).toBe("client");
+      expect(readNumberField(previewRender, "analysisSeed")).toBe(7);
+      expect(readNumberField(previewRender, "analysisIterations")).toBe(500);
+
+      const previewArtifactPath = join(
+        projectDirectory(store.dataDir, toProposalProjectId(projectId)),
+        readStringField(previewArtifact, "uri"),
+      );
+      expect(await readFile(previewArtifactPath, "utf8")).toContain(
+        "Updated Operations AI Pilot",
+      );
 
       const pdfBytes = Buffer.from("%PDF-project-route-test");
       const exportResponse = await handleApiRoute(
@@ -528,6 +552,28 @@ describe("server API routes", () => {
       expect(binary.status).toBe(200);
       expect(binary.body).toEqual(pdfBytes);
       expect(binary.headers["Content-Disposition"]).toBe('attachment; filename="Acme Project.pdf"');
+      expect(binary.headers["X-ScopeForge-Pdf-Artifact-Uri"]).toContain("Acme Project.pdf");
+      expect(binary.headers["X-ScopeForge-Html-Artifact-Uri"]).toContain("Acme Project.html");
+
+      const persisted = store.get(toProposalProjectId(projectId));
+      if (persisted === null) throw new Error("Expected persisted project artifacts.");
+      const artifacts = persisted.artifacts;
+      const htmlArtifact = findArtifactByKind(artifacts, "proposal-html");
+      const pdfArtifact = findArtifactByKind(artifacts, "proposal-pdf");
+      const pdfRender = readRecordField(pdfArtifact, "render");
+
+      expect(artifacts).toHaveLength(3);
+      expect(readStringField(htmlArtifact, "sourceVersionId")).toBe(updatedVersionId);
+      expect(readStringField(pdfArtifact, "sourceVersionId")).toBe(updatedVersionId);
+      expect(readStringField(pdfRender, "renderer")).toBe("scopeforge.proposalPdf");
+      expect(readStringField(pdfRender, "format")).toBe("Letter");
+      expect(readNumberField(pdfArtifact, "bytes")).toBe(pdfBytes.byteLength);
+
+      const projectDir = projectDirectory(store.dataDir, toProposalProjectId(projectId));
+      expect(await readFile(join(projectDir, readStringField(htmlArtifact, "uri")), "utf8")).toContain(
+        "Updated Operations AI Pilot",
+      );
+      expect(await readFile(join(projectDir, readStringField(pdfArtifact, "uri")))).toEqual(pdfBytes);
     });
   });
 
@@ -1050,6 +1096,15 @@ function expectBinary(
     throw new Error("Expected a binary route response.");
   }
   return response;
+}
+
+function findArtifactByKind(
+  artifacts: readonly unknown[],
+  kind: string,
+): Readonly<Record<string, unknown>> {
+  const artifact = artifacts.find((item) => isRecord(item) && item.kind === kind);
+  if (!isRecord(artifact)) throw new Error(`Expected ${kind} artifact.`);
+  return artifact;
 }
 
 function readRecordField(input: unknown, key: string): Readonly<Record<string, unknown>> {

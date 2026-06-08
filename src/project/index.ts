@@ -14,6 +14,7 @@ export type {
   ProposalArtifactKind,
   ProposalArtifactMetadata,
   ProposalArtifactOrigin,
+  ProposalArtifactRenderMetadata,
   ProposalAuthorId,
   ProposalAuthorKind,
   ProposalAuthorMetadata,
