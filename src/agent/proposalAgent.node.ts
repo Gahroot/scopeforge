@@ -1,11 +1,14 @@
 import { Agent } from "@kenkaiiii/gg-agent";
 import type { Message } from "@kenkaiiii/gg-ai";
-import type { EnabledAgentConfig } from "./config.node.js";
+import {
+  DEFAULT_AGENT_TEMPERATURE,
+  resolveAgentTemperature,
+  type EnabledAgentConfig,
+} from "./config.node.js";
 import { createProposalTools } from "./tools.node.js";
 import type { AgentSession } from "./session.node.js";
 
 export const DEFAULT_MAX_TURNS = 12;
-const DEFAULT_TEMPERATURE = 0.2;
 
 const SYSTEM_PROMPT = [
   "You are ScopeForge's proposal copilot. You help a consultant turn a vague build request",
@@ -55,6 +58,7 @@ export function buildProposalAgent(options: BuildProposalAgentOptions): Agent {
     contextNote === undefined || contextNote.trim().length === 0
       ? SYSTEM_PROMPT
       : `${SYSTEM_PROMPT}\n\n${contextNote.trim()}`;
+  const temperature = resolveAgentTemperature(config, DEFAULT_AGENT_TEMPERATURE);
   return new Agent({
     provider: config.provider,
     model: config.model,
@@ -63,7 +67,7 @@ export function buildProposalAgent(options: BuildProposalAgentOptions): Agent {
     tools: createProposalTools(session),
     signal,
     maxTurns: maxTurns ?? DEFAULT_MAX_TURNS,
-    temperature: config.temperature ?? DEFAULT_TEMPERATURE,
+    ...(temperature === undefined ? {} : { temperature }),
     ...(priorMessages === undefined ? {} : { priorMessages }),
     ...(config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl }),
     ...(config.maxTokens === undefined ? {} : { maxTokens: config.maxTokens }),

@@ -1,8 +1,10 @@
 import {
   AgentConfigError,
+  DEFAULT_AGENT_TEMPERATURE,
   agentConfigToStreamDefaults,
   loadAgentConfigFromEnv,
   readAgentConfigFromEnv,
+  resolveAgentTemperature,
   summarizeAgentConfig,
   type AgentConfigEnv,
 } from "./config.node.js";
@@ -68,6 +70,42 @@ describe("agent config", () => {
       clearToolUses: true,
       promptCacheKey: "scopeforge-local",
     });
+  });
+
+  it("omits temperature for Anthropic Opus 4.8 while keeping it for Kimi", () => {
+    const anthropic = readAgentConfigFromEnv({
+      SCOPEFORGE_AGENT_PROVIDER: "anthropic",
+      SCOPEFORGE_AGENT_MODEL: "claude-opus-4-8",
+      SCOPEFORGE_AGENT_API_KEY: secret,
+      SCOPEFORGE_AGENT_TEMPERATURE: "0.2",
+    });
+    if (!anthropic.enabled) throw new Error("Expected enabled Anthropic config.");
+
+    expect(resolveAgentTemperature(anthropic, DEFAULT_AGENT_TEMPERATURE)).toBeUndefined();
+    expect(
+      resolveAgentTemperature(
+        { provider: "anthropic", model: "claude-opus-4.8", temperature: 0.2 },
+        DEFAULT_AGENT_TEMPERATURE,
+      ),
+    ).toBeUndefined();
+    expect(agentConfigToStreamDefaults(anthropic)).not.toHaveProperty("temperature");
+
+    const kimi = readAgentConfigFromEnv({
+      SCOPEFORGE_AGENT_PROVIDER: "moonshot",
+      SCOPEFORGE_AGENT_MODEL: "kimi-k2.6",
+      SCOPEFORGE_AGENT_API_KEY: secret,
+      SCOPEFORGE_AGENT_TEMPERATURE: "0.2",
+    });
+    if (!kimi.enabled) throw new Error("Expected enabled Kimi config.");
+
+    expect(resolveAgentTemperature(kimi, DEFAULT_AGENT_TEMPERATURE)).toBe(0.2);
+    expect(
+      resolveAgentTemperature(
+        { provider: "moonshot", model: "kimi-k2.6" },
+        DEFAULT_AGENT_TEMPERATURE,
+      ),
+    ).toBe(0.2);
+    expect(agentConfigToStreamDefaults(kimi)).toMatchObject({ temperature: 0.2 });
   });
 
   it("uses provider-specific key env vars without exposing their values in summaries", () => {

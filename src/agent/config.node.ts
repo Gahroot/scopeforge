@@ -75,6 +75,8 @@ export interface EnabledAgentConfig {
 
 export type AgentConfig = DisabledAgentConfig | EnabledAgentConfig;
 
+export const DEFAULT_AGENT_TEMPERATURE = 0.2;
+
 export interface AgentConfigValidationError {
   readonly key: string;
   readonly message: string;
@@ -222,13 +224,14 @@ export function readAgentConfigFromEnv(input: AgentConfigEnv = nodeEnv): AgentCo
 }
 
 export function agentConfigToStreamDefaults(config: EnabledAgentConfig): AgentStreamDefaults {
+  const temperature = resolveAgentTemperature(config);
   return {
     provider: config.provider,
     model: config.model,
     apiKey: config.apiKey,
     ...(config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl }),
     ...(config.maxTokens === undefined ? {} : { maxTokens: config.maxTokens }),
-    ...(config.temperature === undefined ? {} : { temperature: config.temperature }),
+    ...(temperature === undefined ? {} : { temperature }),
     ...(config.topP === undefined ? {} : { topP: config.topP }),
     ...(config.thinking === undefined ? {} : { thinking: config.thinking }),
     ...(config.cacheRetention === undefined ? {} : { cacheRetention: config.cacheRetention }),
@@ -237,6 +240,23 @@ export function agentConfigToStreamDefaults(config: EnabledAgentConfig): AgentSt
     ...(config.clearToolUses === undefined ? {} : { clearToolUses: config.clearToolUses }),
     ...(config.promptCacheKey === undefined ? {} : { promptCacheKey: config.promptCacheKey }),
   };
+}
+
+export function resolveAgentTemperature(
+  config: Pick<EnabledAgentConfig, "provider" | "model" | "temperature">,
+  fallbackTemperature?: number,
+): number | undefined {
+  if (shouldOmitAgentTemperature(config.provider, config.model)) return undefined;
+  return config.temperature ?? fallbackTemperature;
+}
+
+export function shouldOmitAgentTemperature(provider: AgentProvider, model: string): boolean {
+  return provider === "anthropic" && isAnthropicOpus48Model(model);
+}
+
+function isAnthropicOpus48Model(model: string): boolean {
+  const normalized = model.trim().toLowerCase().replace(/[._]/g, "-");
+  return /(^|-)opus-4-8($|-)/.test(normalized);
 }
 
 export function summarizeAgentConfig(config: AgentConfig): AgentConfigSummary {
