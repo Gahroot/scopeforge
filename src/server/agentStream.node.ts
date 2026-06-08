@@ -1,7 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { EnabledAgentConfig } from "../agent/config.node.js";
 import { logError, logWarn } from "../diagnostics/logger.node.js";
-import { errorFrame, runProposalAgentStream } from "../agent/proposalAgentService.node.js";
+import {
+  errorFrame,
+  runProposalAgentStream as runProposalAgentStreamDefault,
+  type RunProposalAgentStreamOptions,
+} from "../agent/proposalAgentService.node.js";
 import {
   DEFAULT_SESSION_AUTHOR,
   applyClientBrandToSession,
@@ -408,10 +412,15 @@ function projectStoreLoadDetails(load: ProposalProjectStoreLoadResult): readonly
   return load.errors.map((error) => `${error.code}: ${error.path}: ${error.message}`);
 }
 
+export type ProposalAgentStreamRunner = (
+  options: RunProposalAgentStreamOptions,
+) => AsyncGenerator<AgentStreamFrame>;
+
 export interface AgentStreamHandlerOptions {
   readonly config: EnabledAgentConfig;
   readonly sessions: SessionStore;
   readonly proposalProjectStore?: AgentProposalProjectStore;
+  readonly runProposalAgentStream?: ProposalAgentStreamRunner;
 }
 
 /**
@@ -511,6 +520,7 @@ export async function handleAgentMessages(
     projectPersistenceContext === undefined
       ? undefined
       : () => persistProjectBackedAgentSession(session, projectPersistenceContext);
+  const runProposalAgentStream = options.runProposalAgentStream ?? runProposalAgentStreamDefault;
   try {
     for await (const frame of runProposalAgentStream({
       config: options.config,
@@ -555,12 +565,11 @@ async function persistProjectBackedAgentSession(
     });
   }
 
-  const update = projectContext.store.update;
-  if (update === undefined) {
+  if (projectContext.store.update === undefined) {
     throw new Error("Proposal project storage cannot save agent changes.");
   }
 
-  const updated = await update(projectContext.project.projectId, {
+  const updated = await projectContext.store.update(projectContext.project.projectId, {
     sourceOfTruth,
     createdBy: session.createdBy,
     parentVersionId: projectContext.currentVersion.versionId,

@@ -71,6 +71,7 @@ import type {
 } from "../proposal/types.js";
 import { isMissingChromiumError, renderProposalPdfBytes } from "../render/pdf.node.js";
 import { renderValueProposalHtml } from "../render/valueProposalHtml.js";
+import type { ProposalAgentStreamRunner } from "./agentStream.node.js";
 
 const API_PREFIX = "/api";
 const DEFAULT_BRAND_ID = "nolan";
@@ -198,6 +199,7 @@ export interface AppRouteDependencies {
   readonly brandLookupHost?: WebsiteBrandLookup;
   readonly brandNow?: () => Date;
   readonly agentSummary?: AgentConfigSummary;
+  readonly runProposalAgentStream?: ProposalAgentStreamRunner;
 }
 
 interface ResolvedProposalDocument {

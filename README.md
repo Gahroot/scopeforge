@@ -17,6 +17,7 @@ npm install
 | `npm run app:server` | Serve the built Vite UI from `dist/` with local API routes. |
 | `npm run build` | Type-check then produce the production build (`tsc && vite build`). |
 | `npm run test` | Run the Vitest suite once. |
+| `npm run test:e2e:collab` | Run the collaborative proposal-project E2E workflow test. |
 | `npm run typecheck` | Type-check without emitting (`tsc --noEmit`). |
 | `npm run proposal` | Generate proposal PDF/HTML from intake JSON. |
 | `npm run proposal:sample` | Generate the Triten sample proposal into `out/`. |
@@ -115,23 +116,56 @@ instead of the Vite-only URL when exporting PDFs. The browser API and CLI both
 render with Playwright Chromium; if Chromium is missing, run
 `npx playwright install chromium` once.
 
+## Collaborative proposal projects
+
+Run the collaborative app locally with the Node app server:
+
+```bash
+npm run app:dev
+```
+
+Agent/model calls are optional. Leave `SCOPEFORGE_AGENT_ENABLED=false` or unset
+for draft/project APIs without live model calls, or export the optional
+`SCOPEFORGE_AGENT_*` variables from [`.env.example`](.env.example) before
+starting the server. Keep secrets server-side; do not put them in `VITE_*`
+variables.
+
+A proposal project is versioned around structured JSON, not the chat transcript.
+The latest `sourceOfTruth` contains the reviewed `draft`, `vendorBrand`, and
+`clientBrand`; those draft/brand JSON objects drive validation, analysis,
+rendering, and export. HTML previews and PDFs are saved as versioned artifacts
+with source version/hash metadata, so a PDF is a replayable output, not the
+canonical state.
+
+Partners can manage chat context by starting a fresh chat from the latest
+project version instead of carrying an old thread forever. Each update, brand
+import, agent message, preview, or PDF export should include the base version it
+was created from; stale bases return a `base_version_conflict` with the current
+project metadata so the partner can fetch latest state and retry deliberately.
+
+Run the collaborative E2E workflow test with:
+
+```bash
+npm run test:e2e:collab
+```
+
 Detailed docs:
 
 - [Local app server](docs/APP_SERVER.md)
 - [Proposal generation workflow](docs/PROPOSAL_GENERATION.md)
-- [Conversational proposal target flow](docs/CONVERSATIONAL_PROPOSALS.md)
+- [Collaborative conversational proposal flow](docs/CONVERSATIONAL_PROPOSALS.md)
 - [Meeting summary to proposal-intake prompt](docs/MEETING_SUMMARY_TO_PROPOSAL_PROMPT.md)
 
 ## Target conversational flow
 
-The next product layer is a chat-driven drafting experience. The assistant may
-ask questions, transform notes, and derive brand profiles from public websites,
-but accepted changes patch a structured proposal draft as the only source of
-truth. A local Node agent service handles model calls, website fetches, local
-draft files, and Playwright export so the browser stays client-safe and
-secret-free.
+The chat-driven layer is a local collaborative drafting experience. The
+assistant may ask questions, transform notes, and derive brand profiles from
+public websites, but accepted changes patch structured project source-of-truth
+JSON (`draft`, `vendorBrand`, and `clientBrand`). A local Node agent service
+handles model calls, website fetches, local project files, and Playwright export
+so the browser stays client-safe and secret-free.
 
-From a fixed draft, ScopeForge runs the deterministic sequence:
+From fixed draft/brand JSON, ScopeForge runs the deterministic sequence:
 `validate → analyzeProject(seed, iterations) → render HTML → export PDF`. Client
 exports block on guardrail errors and omit internal cost floors, margins, risk
 pads, raw prompts, and unreviewed website claims.

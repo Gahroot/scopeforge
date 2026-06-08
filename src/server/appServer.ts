@@ -30,6 +30,7 @@ export interface AppServerOptions {
   readonly routes?: AppRouteDependencies;
   readonly agentConfig?: AgentConfig;
   readonly agentEnv?: AgentConfigEnv;
+  readonly sessionIdFactory?: () => string;
 }
 
 export interface RunningAppServer {
@@ -72,7 +73,9 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ru
     staticDir,
     routes: { ...(options.routes ?? {}), agentSummary },
     agentConfig,
-    sessions: createSessionStore(),
+    sessions: createSessionStore(
+      options.sessionIdFactory === undefined ? {} : { idFactory: options.sessionIdFactory },
+    ),
     vite,
   };
 
@@ -158,6 +161,9 @@ async function handleNodeRequest(
           ...(context.routes.proposalProjectStore === undefined
             ? {}
             : { proposalProjectStore: context.routes.proposalProjectStore }),
+          ...(context.routes.runProposalAgentStream === undefined
+            ? {}
+            : { runProposalAgentStream: context.routes.runProposalAgentStream }),
         });
         status = response.statusCode;
         return;
