@@ -3915,8 +3915,7 @@ function isAcceptableDraftStatus(status: ProposalDraftStatus): boolean {
 
 type TemplateRouteAction =
   | { readonly action: "collection" }
-  | { readonly action: "get"; readonly templateId: string }
-  | { readonly action: "delete"; readonly templateId: string }
+  | { readonly action: "single"; readonly templateId: string }
   | { readonly action: "use"; readonly templateId: string };
 
 function parseTemplateRoute(pathname: string): TemplateRouteAction | null {
@@ -3934,7 +3933,7 @@ function parseTemplateRoute(pathname: string): TemplateRouteAction | null {
   if (templateId.trim().length === 0) return null;
 
   if (segments.length === 1) {
-    return { action: "get", templateId };
+    return { action: "single", templateId };
   }
 
   if (segments.length === 2 && segments[1] === "use") {
@@ -3961,16 +3960,17 @@ async function handleTemplateRoute(
         "GET, POST",
         "Template collections support list and create.",
       );
-    case "get":
+    case "single":
       if (request.method === "GET") {
         return getTemplateResponse(route.templateId, dependencies);
       }
-      return methodNotAllowedResponse("GET", "Template retrieval is read-only.");
-    case "delete":
       if (request.method === "DELETE") {
         return deleteTemplateResponse(route.templateId, dependencies);
       }
-      return methodNotAllowedResponse("DELETE", "Template deletion requires DELETE.");
+      return methodNotAllowedResponse(
+        "GET, DELETE",
+        "Template retrieval supports GET; deletion supports DELETE.",
+      );
     case "use":
       if (request.method === "POST") {
         return useTemplateResponse(route.templateId, request.body, dependencies);
