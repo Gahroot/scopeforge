@@ -15,6 +15,7 @@ import type {
   SourceMaterialConfidence,
   SourceMaterialDocument,
   SourceMaterialFacts,
+  SourceMaterialKind,
 } from "./types.js";
 
 interface LabelledLine {
@@ -194,7 +195,7 @@ export function createProposalDraftCandidate(
   const facts = extractSourceMaterialFacts(document.text);
   const draftPatch = buildCandidatePatch(facts);
   const missingInputs = buildMissingInputs(facts);
-  const confidence = candidateConfidence(facts);
+  const confidence = candidateConfidence(facts, document.metadata.kind);
   const summary = summarizeFacts(facts, missingInputs);
 
   return {
@@ -827,7 +828,10 @@ function workstreamEvidence(name: string, facts: SourceMaterialFacts): string {
   return source ?? name;
 }
 
-function candidateConfidence(facts: SourceMaterialFacts): SourceMaterialConfidence {
+function candidateConfidence(
+  facts: SourceMaterialFacts,
+  kind?: SourceMaterialKind,
+): SourceMaterialConfidence {
   let score = 0;
   if (facts.companyName !== undefined) score += 1;
   if (facts.buyerTitle !== undefined) score += 1;
@@ -836,8 +840,11 @@ function candidateConfidence(facts: SourceMaterialFacts): SourceMaterialConfiden
   if (facts.painPoints.length > 0) score += 1;
   if (candidateWorkstreamNames(facts).length > 0) score += 1;
   if (facts.roleSegments.length > 0 || facts.workflowValues.length > 0) score += 1;
-  if (score >= 6) return "high";
-  if (score >= 3) return "medium";
+  // Vision-extracted facts get a confidence bump because the AI has already
+  // interpreted the visual content into structured data.
+  if (kind === "image") score += 1;
+  if (score >= 7) return "high";
+  if (score >= 4) return "medium";
   return "low";
 }
 

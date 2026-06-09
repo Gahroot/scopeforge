@@ -1,8 +1,10 @@
 import { extname } from "node:path";
+import type { EnabledAgentConfig } from "../agent/config.node.js";
 import {
   DEFAULT_FILE_SOURCE_NAME,
   DEFAULT_PASTE_SOURCE_NAME,
   MAX_SOURCE_MATERIAL_FILE_BYTES,
+  MAX_SOURCE_MATERIAL_IMAGE_FILE_BYTES,
   MAX_SOURCE_MATERIAL_TEXT_CHARS,
   SUPPORTED_SOURCE_MATERIAL_EXTENSIONS,
   SUPPORTED_SOURCE_MATERIAL_MEDIA_TYPES,
@@ -17,6 +19,7 @@ import type {
   SourceMaterialOrigin,
   SourceMaterialTextInput,
 } from "./types.js";
+import { extractFromImage } from "./vision.node.js";
 
 interface ResolvedMaterialType {
   readonly kind: SourceMaterialKind;
@@ -85,10 +88,15 @@ export function extractSourceMaterialFromText(
   });
 }
 
-export function extractSourceMaterialFromFile(
+export async function extractSourceMaterialFromFile(
   input: SourceMaterialFileInput,
-): SourceMaterialExtractionResult {
-  const maxBytes = input.maxBytes ?? MAX_SOURCE_MATERIAL_FILE_BYTES;
+  agentConfig?: EnabledAgentConfig,
+): Promise<SourceMaterialExtractionResult> {
+  const isImageFile = isImageFileInput(input);
+  const defaultMaxBytes = isImageFile
+    ? MAX_SOURCE_MATERIAL_IMAGE_FILE_BYTES
+    : MAX_SOURCE_MATERIAL_FILE_BYTES;
+  const maxBytes = input.maxBytes ?? defaultMaxBytes;
   const maxTextCharacters = input.maxTextCharacters ?? MAX_SOURCE_MATERIAL_TEXT_CHARS;
   const bytes = Buffer.from(input.bytes);
   const sourceName = cleanSourceName(input.fileName, DEFAULT_FILE_SOURCE_NAME);
@@ -120,6 +128,8 @@ export function extractSourceMaterialFromFile(
       return extractPdfSource(bytes, sourceName, resolved.value, maxTextCharacters);
     case "json":
       return extractJsonSource(bytes, sourceName, resolved.value, maxTextCharacters);
+    case "image":
+      return extractImageSource(bytes, resolved.value.mediaType, agentConfig);
     case "meeting_notes":
     case "transcript_summary":
     case "text":
@@ -165,6 +175,25 @@ function extractPdfSource(
       truncated: limited.truncated,
     },
   });
+}
+
+async function extractImageSource(
+  bytes: Buffer,
+  mediaType: string,
+  agentConfig: EnabledAgentConfig | undefined,
+): Promise<SourceMaterialExtractionResult> {
+  if (agentConfig === undefined || !agentConfig.enabled) {
+    return extractionFailure({
+      code: "source_material_image_no_provider",
+      message:
+        "Image extraction requires an AI provider. Enable an agent provider (OpenAI or Anthropic) to process images.",
+      details: [
+        "Set SCOPEFORGE_AGENT_PROVIDER, SCOPEFORGE_AGENT_MODEL, and an API key.",
+      ],
+    });
+  }
+
+  return extractFromImage(bytes, mediaType, agentConfig);
 }
 
 function extractJsonSource(
@@ -360,7 +389,7 @@ function resolveMaterialType(input: {
       ok: false,
       error: {
         code: "source_material_unsupported",
-        message: "Unsupported source material type. Upload text, JSON, Markdown, CSV, or PDF.",
+        message: "Unsupported source material type. Upload text, JSON, Markdown, CSV, PDF, or an image.",
         details: [
           `mediaType: ${mediaType}`,
           `extension: ${extension.length === 0 ? "(none)" : extension}`,
@@ -378,7 +407,7 @@ function resolveMaterialType(input: {
       ok: false,
       error: {
         code: "source_material_unsupported",
-        message: "Unsupported source material type. Upload text, JSON, Markdown, CSV, or PDF.",
+        message: "Unsupported source material type. Upload text, JSON, Markdown, CSV, PDF, or an image.",
         details: [`mediaType: ${mediaType}`, `extension: ${extension}`],
       },
     };
@@ -401,6 +430,8 @@ function kindFromMediaTypeOrExtension(
 ): SourceMaterialKind | null {
   if (mediaType.includes("pdf") || extension === ".pdf" || hasPdfHeader(bytes)) return "pdf";
   if (mediaType.includes("json") || extension === ".json") return "json";
+  if (mediaType.startsWith("image/")) return "image";
+  if (isImageExtension(extension)) return "image";
   if (mediaType.startsWith("text/") || isSupportedExtension(extension)) return "text";
   if (mediaType === "application/octet-stream" && !looksBinary(bytes)) return "text";
   return null;
@@ -421,6 +452,15 @@ function mediaTypeFromExtension(extension: string): string {
     case ".text":
     case ".txt":
       return DEFAULT_TEXT_MEDIA_TYPE;
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    case ".gif":
+      return "image/gif";
     default:
       return "application/octet-stream";
   }
@@ -501,6 +541,25 @@ function hasPdfHeader(bytes: Buffer): boolean {
   return bytes.subarray(0, 5).toString("latin1") === "%PDF-";
 }
 
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+const IMAGE_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+function isImageExtension(extension: string): boolean {
+  return IMAGE_EXTENSIONS.has(extension);
+}
+
+function isImageMediaInput(mediaType: string): boolean {
+  return IMAGE_MEDIA_TYPES.has(mediaType);
+}
+
+function isImageFileInput(input: SourceMaterialFileInput): boolean {
+  if (input.sourceKind === "image") return true;
+  const ext = fileExtension(input.fileName);
+  if (isImageExtension(ext)) return true;
+  if (input.mediaType !== undefined && isImageMediaInput(input.mediaType)) return true;
+  return false;
+}
+
 function isSupportedMediaType(mediaType: string): boolean {
   if (mediaType === "application/octet-stream") return true;
   return SUPPORTED_SOURCE_MATERIAL_MEDIA_TYPES.some((candidate) => candidate === mediaType);
@@ -541,6 +600,8 @@ export function sourceMaterialKindLabel(kind: SourceMaterialKind): string {
       return "JSON";
     case "pdf":
       return "PDF";
+    case "image":
+      return "image";
   }
 }
 
@@ -550,7 +611,8 @@ export function isSourceMaterialKind(input: unknown): input is SourceMaterialKin
     input === "transcript_summary" ||
     input === "text" ||
     input === "json" ||
-    input === "pdf"
+    input === "pdf" ||
+    input === "image"
   );
 }
 

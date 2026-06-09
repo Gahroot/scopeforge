@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   WebsiteBrandFetchError,
   extractWebsiteBrand as extractWebsiteBrandFromUrl,
@@ -104,7 +103,7 @@ import { resolveStylePreset } from "../proposal/presets.js";
 import type { StylePreset } from "../proposal/stylePreset.js";
 import type { ProposalAgentStreamRunner } from "./agentStream.node.js";
 import { ShareTokenStore, type ShareToken, toShareToken } from "../project/shareStore.js";
-import { EngagementTracker, validateEngagementEvent, type EngagementEvent } from "./trackingStore.js";
+import { EngagementTracker, validateEngagementEvent } from "./trackingStore.js";
 import { buildTrackingScript } from "./trackingScript.js";
 
 const API_PREFIX = "/api";
@@ -330,7 +329,7 @@ export async function handleApiRoute(
   if (agentSettingsResponse !== null) return agentSettingsResponse;
   if (request.method === "GET" && pathname === "/api/brands") return brandsResponse();
   if (request.method === "POST" && pathname === "/api/source-material/ingest") {
-    return ingestSourceMaterialResponse(request.body);
+    return ingestSourceMaterialResponse(request.body, dependencies);
   }
 
   const proposalProjectRoute = parseProposalProjectRoute(pathname);
@@ -2333,9 +2332,17 @@ interface SourceMaterialRouteFileInput {
   readonly base64: string;
 }
 
-function ingestSourceMaterialResponse(input: unknown): ApiRouteResponse {
+async function ingestSourceMaterialResponse(
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
   const request = resolveSourceMaterialIngestInput(input);
   if (!request.ok) return request.response;
+
+  const agentConfig =
+    dependencies.envAgentConfig?.enabled === true
+      ? dependencies.envAgentConfig
+      : undefined;
 
   const fileSourceName = request.value.file?.name ?? request.value.sourceName;
   const extracted =
@@ -2351,7 +2358,7 @@ function ingestSourceMaterialResponse(input: unknown): ApiRouteResponse {
           origin: "paste",
           maxTextCharacters: MAX_SOURCE_MATERIAL_TEXT_CHARS,
         })
-      : extractSourceMaterialFromFile({
+      : await extractSourceMaterialFromFile({
           bytes: request.value.file.bytes,
           ...(fileSourceName === undefined ? {} : { fileName: fileSourceName }),
           ...(request.value.file.mediaType === undefined
@@ -2362,7 +2369,7 @@ function ingestSourceMaterialResponse(input: unknown): ApiRouteResponse {
             : { sourceKind: request.value.sourceKind }),
           maxBytes: MAX_SOURCE_MATERIAL_FILE_BYTES,
           maxTextCharacters: MAX_SOURCE_MATERIAL_TEXT_CHARS,
-        });
+        }, agentConfig);
 
   if (!extracted.ok) return sourceMaterialFailureResponse(extracted.error);
   const candidate = createProposalDraftCandidate(extracted.document);
@@ -2556,6 +2563,8 @@ function sourceMaterialFailureResponse(error: {
     case "source_material_unsupported":
       return failureResponse(415, error.code, error.message, error.details);
     case "source_material_pdf_unreadable":
+    case "source_material_image_unreadable":
+    case "source_material_image_no_provider":
       return failureResponse(422, error.code, error.message, error.details);
     default:
       return failureResponse(400, error.code, error.message, error.details);
@@ -3523,14 +3532,7 @@ async function viewSharedProposalResponse(
     `${buildTrackingScript(String(token))}\n</body>`,
   );
 
-  // Record viewed event (fire-and-forget)
-  const tracker = dependencies.engagementTracker ?? createDefaultEngagementTracker();
-  void tracker.record(token, {
-    event: "viewed",
-    ts: new Date().toISOString(),
-    viewerId: `server-${randomUUID()}`,
-  });
-
+  // Client-side script records the 'viewed' event with a stable viewer ID.
   const bytes = new TextEncoder().encode(trackedHtml);
   return {
     kind: "binary",

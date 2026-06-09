@@ -66,6 +66,7 @@ const sourceMaterialKindSchema = z.enum([
   "text",
   "json",
   "pdf",
+  "image",
 ]);
 
 const workstreamSchema = z.object({

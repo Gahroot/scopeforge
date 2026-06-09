@@ -4,6 +4,7 @@ export {
   MAX_SOURCE_MATERIAL_AGENT_PROMPT_CHARS,
   MAX_SOURCE_MATERIAL_BASE64_CHARS,
   MAX_SOURCE_MATERIAL_FILE_BYTES,
+  MAX_SOURCE_MATERIAL_IMAGE_FILE_BYTES,
   MAX_SOURCE_MATERIAL_TEXT_CHARS,
   SUPPORTED_SOURCE_MATERIAL_EXTENSIONS,
   SUPPORTED_SOURCE_MATERIAL_MEDIA_TYPES,
@@ -14,6 +15,7 @@ export {
   isSourceMaterialKind,
   sourceMaterialKindLabel,
 } from "./extract.node.js";
+export { extractFromImage } from "./vision.node.js";
 export {
   applyProposalDraftCandidatePatch,
   createProposalDraftCandidate,

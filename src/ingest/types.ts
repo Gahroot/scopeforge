@@ -6,6 +6,7 @@ export const SOURCE_MATERIAL_KINDS = [
   "text",
   "json",
   "pdf",
+  "image",
 ] as const;
 
 export type SourceMaterialKind = (typeof SOURCE_MATERIAL_KINDS)[number];
@@ -35,7 +36,9 @@ export interface SourceMaterialError {
     | "source_material_too_large"
     | "source_material_unsupported"
     | "source_material_invalid"
-    | "source_material_pdf_unreadable";
+    | "source_material_pdf_unreadable"
+    | "source_material_image_unreadable"
+    | "source_material_image_no_provider";
   readonly message: string;
   readonly details?: readonly string[];
 }

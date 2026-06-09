@@ -49,7 +49,7 @@ describe("source-material ingestion", () => {
     );
   });
 
-  it("turns uploaded JSON into useful source text and candidate facts", () => {
+  it("turns uploaded JSON into useful source text and candidate facts", async () => {
     const bytes = Buffer.from(
       JSON.stringify({
         client: { company: "JsonCo", buyer: "COO", headcount: 18 },
@@ -58,7 +58,7 @@ describe("source-material ingestion", () => {
       }),
     );
 
-    const extracted = extractSourceMaterialFromFile({
+    const extracted = await extractSourceMaterialFromFile({
       bytes,
       fileName: "summary.json",
       mediaType: "application/json",
@@ -77,7 +77,7 @@ describe("source-material ingestion", () => {
     );
   });
 
-  it("extracts selectable text from simple PDFs and rejects oversize uploads", () => {
+  it("extracts selectable text from simple PDFs and rejects oversize uploads", async () => {
     const pdf = Buffer.from(
       [
         "%PDF-1.4",
@@ -95,7 +95,7 @@ describe("source-material ingestion", () => {
       "latin1",
     );
 
-    const extracted = extractSourceMaterialFromFile({
+    const extracted = await extractSourceMaterialFromFile({
       bytes: pdf,
       fileName: "notes.pdf",
       mediaType: "application/pdf",
@@ -105,7 +105,7 @@ describe("source-material ingestion", () => {
     expect(extracted.document.text).toContain("Client: PDF Co");
     expect(extracted.document.text).toContain("Power BI");
 
-    const tooLarge = extractSourceMaterialFromFile({
+    const tooLarge = await extractSourceMaterialFromFile({
       bytes: Buffer.alloc(6),
       fileName: "large.txt",
       mediaType: "text/plain",
