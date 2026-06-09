@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FileText, Sparkles } from "lucide-react";
+import { FileText, Layers, Sparkles } from "lucide-react";
 import { AgentSettingsDialog } from "./settings/AgentSettingsDialog.js";
 import { BrandBar } from "./brand/BrandBar.js";
 import type { BrandImportProjectUpdate, BrandRole } from "./brand/BrandImportDialog.js";
@@ -18,6 +18,8 @@ import {
   fetchProposalProjectState,
   fetchProposalProjectUpdates,
   ingestSourceMaterial,
+  fetchBatchJobStatus,
+  type BatchJobStatusResponse,
   type CreateProposalProjectResponse,
   type HealthResponse,
   type ProposalProjectListItemResponse,
@@ -26,6 +28,9 @@ import {
 } from "./lib/api.js";
 import { projectUpdateFromState, type ProjectConflictNotice } from "./lib/collaboration.js";
 import { projectStateToSessionSnapshot } from "./lib/projectSnapshot.js";
+import { BatchJobCard } from "./projects/BatchJobCard.js";
+import { BatchResults } from "./projects/BatchResults.js";
+import { BatchUploadPanel } from "./projects/BatchUploadPanel.js";
 import { CollaborationStatus } from "./projects/CollaborationStatus.js";
 import { ProjectPicker } from "./projects/ProjectPicker.js";
 import type { ProposalProject } from "../project/types.js";
@@ -49,6 +54,8 @@ export function App(): JSX.Element {
   const [projectConflict, setProjectConflict] = useState<ProjectConflictNotice | null>(null);
   const [refreshingLatest, setRefreshingLatest] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [batchJobs, setBatchJobs] = useState<readonly BatchJobStatusResponse[]>([]);
+  const [viewingBatchJobId, setViewingBatchJobId] = useState<string | null>(null);
   const [selectedProjectVersionId, setSelectedProjectVersionId] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [stylePresetId, setStylePresetId] = useState<string | undefined>(undefined);
@@ -57,6 +64,23 @@ export function App(): JSX.Element {
   const agent = useAgentStream();
   const collaboratorDisplayName = displayName.trim();
   const authorDisplayName = collaboratorDisplayName.length === 0 ? null : collaboratorDisplayName;
+
+  const handleBatchJobCreated = useCallback((jobId: string): void => {
+    // Fetch initial status and add to the list
+    void (async () => {
+      const result = await fetchBatchJobStatus(jobId);
+      if (result.ok) {
+        setBatchJobs((current) => {
+          const without = current.filter((j) => j.jobId !== jobId);
+          return [result.value, ...without];
+        });
+      }
+    })();
+  }, []);
+
+  const handleViewBatchResults = useCallback((jobId: string): void => {
+    setViewingBatchJobId(jobId);
+  }, []);
 
   const applyProjectState = useCallback((nextState: ProposalProjectStateResponse): void => {
     setProjectState(nextState);
@@ -372,6 +396,14 @@ export function App(): JSX.Element {
           </div>
         </header>
 
+        {selectedProjectId === null && viewingBatchJobId !== null && batchJobs.length > 0 && (
+          <div className="border-b bg-muted/20 px-6 py-2">
+            <div className="mx-auto flex max-w-5xl items-center gap-2 text-xs text-muted-foreground">
+              <Layers className="h-3.5 w-3.5" />
+              <span>Viewing batch results</span>
+            </div>
+          </div>
+        )}
         {projectState !== null && (
           <CollaborationStatus
             state={projectState}
@@ -409,17 +441,51 @@ export function App(): JSX.Element {
             />
           </main>
         ) : (
-          <ProjectPicker
-            projects={projects}
-            loading={projectsLoading}
-            creating={creatingProject}
-            openingProjectId={openingProjectId}
-            error={projectError}
-            displayName={authorDisplayName}
-            onCreate={(title) => void createProject(title)}
-            onOpen={(projectId) => void openProject(projectId)}
-            onRefresh={() => void refreshProjects()}
-          />
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto bg-muted/30">
+            <div className="mx-auto grid w-full max-w-5xl flex-1 gap-4 p-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+              <div className="space-y-4">
+                {viewingBatchJobId !== null ? (
+                  <BatchResults
+                    jobId={viewingBatchJobId}
+                    onOpenProject={(projectId) => void openProject(projectId)}
+                    onBack={() => setViewingBatchJobId(null)}
+                  />
+                ) : (
+                  <ProjectPicker
+                    projects={projects}
+                    loading={projectsLoading}
+                    creating={creatingProject}
+                    openingProjectId={openingProjectId}
+                    error={projectError}
+                    displayName={authorDisplayName}
+                    onCreate={(title) => void createProject(title)}
+                    onOpen={(projectId) => void openProject(projectId)}
+                    onRefresh={() => void refreshProjects()}
+                  />
+                )}
+                {batchJobs.length > 0 && viewingBatchJobId === null && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Layers className="h-4 w-4 text-muted-foreground" />
+                      <h2 className="text-sm font-semibold">Batch Jobs</h2>
+                    </div>
+                    <div className="space-y-3">
+                      {batchJobs.map((job) => (
+                        <BatchJobCard
+                          key={job.jobId}
+                          job={job}
+                          onViewResults={handleViewBatchResults}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="space-y-4">
+                <BatchUploadPanel onJobCreated={handleBatchJobCreated} />
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </TooltipProvider>

@@ -471,6 +471,121 @@ export async function fetchProposalAnalytics(
   );
 }
 
+// ---- Batch job types -------------------------------------------------------
+
+export type BatchJobStatus = "pending" | "processing" | "completed" | "failed" | "cancelled";
+
+export type BatchItemStatus = "pending" | "processing" | "completed" | "failed";
+
+export interface BatchJobItem {
+  readonly itemId: string;
+  readonly fileName: string;
+  readonly status: BatchItemStatus;
+  readonly error?: string;
+  readonly projectId?: string;
+}
+
+export interface BatchJobStatusResponse {
+  readonly ok: boolean;
+  readonly jobId: string;
+  readonly status: BatchJobStatus;
+  readonly itemCount: number;
+  readonly completedCount: number;
+  readonly failedCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly items: readonly BatchJobItem[];
+}
+
+export interface BatchJobResultItem {
+  readonly itemId: string;
+  readonly fileName: string;
+  readonly status: "completed" | "failed";
+  readonly projectId?: string;
+  readonly projectTitle?: string;
+  readonly error?: string;
+}
+
+export interface BatchJobResults {
+  readonly ok: boolean;
+  readonly jobId: string;
+  readonly status: BatchJobStatus;
+  readonly results: readonly BatchJobResultItem[];
+}
+
+export interface BatchSubmitResponse {
+  readonly ok: boolean;
+  readonly jobId: string;
+  readonly itemCount: number;
+}
+
+// ---- Batch job API helpers --------------------------------------------------
+
+export async function submitBatchJob(
+  files: readonly File[],
+  signal?: AbortSignal,
+): Promise<ApiResult<BatchSubmitResponse>> {
+  addClientBreadcrumb("scopeforge.client.request_start", {
+    method: "POST",
+    path: "/api/batch/submit",
+    kind: "formdata",
+    fileCount: files.length,
+  });
+  try {
+    const formData = new FormData();
+    for (const file of files) {
+      formData.append("files", file, file.name);
+    }
+    const response = await fetch("/api/batch/submit", {
+      method: "POST",
+      body: formData,
+      ...(signal === undefined ? {} : { signal }),
+    });
+    addClientBreadcrumb("scopeforge.client.response", {
+      method: "POST",
+      path: "/api/batch/submit",
+      status: response.status,
+    });
+    return readJson<BatchSubmitResponse>(response);
+  } catch (error) {
+    logClientError("scopeforge.client.request_failed", error, {
+      method: "POST",
+      path: "/api/batch/submit",
+    });
+    return networkFailure(error);
+  }
+}
+
+export async function fetchBatchJobStatus(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<BatchJobStatusResponse>> {
+  return getJson<BatchJobStatusResponse>(
+    `/api/batch/${encodeURIComponent(jobId)}`,
+    signal,
+  );
+}
+
+export async function fetchBatchJobResults(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<BatchJobResults>> {
+  return getJson<BatchJobResults>(
+    `/api/batch/${encodeURIComponent(jobId)}/results`,
+    signal,
+  );
+}
+
+export async function cancelBatchJob(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<void>> {
+  return deleteJson<void>(
+    `/api/batch/${encodeURIComponent(jobId)}`,
+    signal,
+  );
+}
+
 export interface PreviewResponse {
   readonly ok: boolean;
   readonly html: string;
@@ -585,4 +700,73 @@ async function exportPdfFromPath(
       ...(pdfArtifactUri === undefined ? {} : { pdfArtifactUri }),
     },
   };
+}
+
+// ---- Proposal acceptance --------------------------------------------------
+
+/** Client-side mirror of the server-side `ProposalAcceptance` record. */
+export interface AcceptanceRecord {
+  readonly acceptanceId: string;
+  readonly projectId: string;
+  readonly versionId: string;
+  readonly clientName: string;
+  readonly clientTitle?: string;
+  readonly clientEmail?: string;
+  readonly signatureType: "typed" | "drawn";
+  readonly signatureData: string;
+  readonly acceptedAt: string;
+  readonly ipAddress?: string;
+}
+
+export interface AcceptanceSubmission {
+  readonly versionId: string;
+  readonly clientName: string;
+  readonly clientTitle?: string;
+  readonly clientEmail?: string;
+  readonly signatureType: "typed" | "drawn";
+  readonly signatureData: string;
+}
+
+export async function acceptProposal(
+  projectId: string,
+  input: AcceptanceSubmission,
+  signal?: AbortSignal,
+): Promise<ApiResult<AcceptanceRecord>> {
+  return postJson<AcceptanceRecord>(
+    `/api/projects/${encodeURIComponent(projectId)}/accept`,
+    input,
+    signal,
+  );
+}
+
+export async function fetchAcceptance(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<AcceptanceRecord | null>> {
+  addClientBreadcrumb("scopeforge.client.request_start", {
+    method: "GET",
+    path: `/api/projects/${encodeURIComponent(projectId)}/acceptance`,
+  });
+  try {
+    const response = await fetch(
+      `/api/projects/${encodeURIComponent(projectId)}/acceptance`,
+      signal === undefined ? {} : { signal },
+    );
+    addClientBreadcrumb("scopeforge.client.response", {
+      method: "GET",
+      path: `/api/projects/${encodeURIComponent(projectId)}/acceptance`,
+      status: response.status,
+    });
+    // 404 means no acceptance exists yet — return null rather than an error.
+    if (response.status === 404) {
+      return { ok: true, value: null };
+    }
+    return readJson<AcceptanceRecord | null>(response);
+  } catch (error) {
+    logClientError("scopeforge.client.request_failed", error, {
+      method: "GET",
+      path: `/api/projects/${encodeURIComponent(projectId)}/acceptance`,
+    });
+    return networkFailure(error);
+  }
 }
