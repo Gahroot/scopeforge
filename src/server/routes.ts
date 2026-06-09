@@ -97,6 +97,8 @@ import type {
 } from "../proposal/types.js";
 import { isMissingChromiumError, renderProposalPdfBytes } from "../render/pdf.node.js";
 import { renderValueProposalHtml } from "../render/valueProposalHtml.js";
+import { resolveStylePreset } from "../proposal/presets.js";
+import type { StylePreset } from "../proposal/stylePreset.js";
 import type { ProposalAgentStreamRunner } from "./agentStream.node.js";
 
 const API_PREFIX = "/api";
@@ -2899,10 +2901,13 @@ function buildProposalRenderBundle(input: unknown): RouteValueResult<ProposalRen
   const generatedAtResult = resolveGeneratedAt(input);
   if (!generatedAtResult.ok) return generatedAtResult;
 
+  const stylePreset = resolveStylePresetFromInput(input);
+
   const html = renderValueProposalHtml(proposal.value.draft, {
     brand: brandResult.value,
     audience: audienceResult.value,
     ...(generatedAtResult.value === undefined ? {} : { generatedAt: generatedAtResult.value }),
+    ...(stylePreset === undefined ? {} : { stylePreset }),
   });
 
   return {
@@ -3122,6 +3127,13 @@ function resolveGeneratedAt(input: unknown): RouteValueResult<Date | undefined> 
     );
   }
   return { ok: true, value: date };
+}
+
+function resolveStylePresetFromInput(input: unknown): StylePreset | undefined {
+  const presetId = readOptionalString(input, "stylePresetId");
+  if (presetId === undefined) return undefined;
+  const preset = resolveStylePreset(presetId);
+  return preset ?? undefined;
 }
 
 function readOptionalPositiveInteger(

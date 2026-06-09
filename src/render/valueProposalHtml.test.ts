@@ -85,6 +85,60 @@ describe("renderValueProposalHtml", () => {
     expect(html).not.toContain("javascript:alert(1)");
   });
 
+  it("applies the generic style preset with centered cover and bordered cards", () => {
+    const draft = validDraft();
+    const genericPreset = {
+      id: "generic",
+      name: "Clean Professional",
+      description: "test",
+      sections: [
+        { id: "cover", label: "Cover", layout: "cover" as const, required: true, order: 0 },
+        { id: "value-unlocks", label: "Value", layout: "full-width" as const, required: true, order: 1 },
+        { id: "build-plan", label: "Build", layout: "two-column" as const, required: true, order: 2 },
+        { id: "actual-deliverables", label: "Deliverables", layout: "full-width" as const, required: true, order: 3 },
+        { id: "investment-next-steps", label: "Investment", layout: "three-column" as const, required: true, order: 4 },
+      ],
+      tone: { formality: "formal" as const, dataDensity: "medium" as const, narrativeWeight: "heavy" as const },
+      css: {
+        coverGradient: "linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)",
+        accentColor: "#2563eb",
+        borderRadius: "12px",
+        pagePadding: "56px 56px 48px",
+        fontFamily: 'Inter, system-ui, sans-serif',
+        headingScale: "24px",
+        bodyScale: "15px",
+        tableStyle: "bordered" as const,
+        cardStyle: "bordered" as const,
+      },
+      layout: {
+        pageCount: 5,
+        coverHeight: "960px",
+        coverLayout: "centered" as const,
+        footerStyle: "centered" as const,
+        metricStripColumns: 3,
+      },
+    };
+
+    const html = renderValueProposalHtml(draft, {
+      brand: BLACK_MOUNTAIN_BRAND,
+      stylePreset: genericPreset,
+      generatedAt: new Date("2026-06-05T12:00:00Z"),
+    });
+
+    // Should use the preset's accent color
+    expect(html).toContain("#2563eb");
+    // Should use the preset's border radius
+    expect(html).toContain("--card-radius: 12px");
+    // Should use the preset's cover gradient
+    expect(html).toContain("linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)");
+    // Should use the preset's font family
+    expect(html).toContain('font-family: Inter, system-ui, sans-serif');
+    // Should use the preset's page padding
+    expect(html).toContain("padding: 56px 56px 48px");
+    // Should still render all 5 pages
+    expect(html.match(/<section class="page/g)).toHaveLength(5);
+  });
+
   it("keeps client output free of internal metadata and cost-floor details", () => {
     const base = validDraft();
     const firstWorkstream = requiredFirst(base.project.cost.workstreams, "cost workstream");

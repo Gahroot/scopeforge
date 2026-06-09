@@ -1,5 +1,6 @@
 import type { Range } from "../core/types.js";
 import { formatMoney, formatProposalDate } from "../proposal/format.js";
+import type { StylePreset } from "../proposal/stylePreset.js";
 import type {
   ProposalActualDeliverable,
   ProposalAudience,
@@ -12,11 +13,14 @@ import type {
   ProposalTerms,
   ProposalValueSourceRow,
 } from "../proposal/types.js";
+import { TRITEN_STYLE_PRESET } from "../proposal/presets.js";
 
 export interface RenderValueProposalHtmlOptions {
   readonly brand: ProposalBrand;
   readonly audience?: ProposalAudience;
   readonly generatedAt?: Date;
+  /** Style preset controlling layout, CSS, and section structure. Defaults to Triten. */
+  readonly stylePreset?: StylePreset;
 }
 
 interface CoverMetric {
@@ -30,8 +34,9 @@ export function renderValueProposalHtml(
 ): string {
   const audience = options.audience ?? "client";
   const brand = options.brand;
+  const stylePreset = options.stylePreset ?? TRITEN_STYLE_PRESET;
   const colors = brand.colors;
-  const clientAccent = draft.preparedFor.accentColor ?? colors.accent;
+  const clientAccent = draft.preparedFor.accentColor ?? stylePreset.css.accentColor;
   const preparedDate = draft.details.date ?? formatGeneratedDate(options.generatedAt);
   const leadPhase = firstPricedPhase(draft.pricing.phases);
   const coverMetrics = buildCoverMetrics(draft, leadPhase);
@@ -46,7 +51,7 @@ export function renderValueProposalHtml(
     :root {
       --brand-primary: ${safeCssColor(colors.primary)};
       --brand-secondary: ${safeCssColor(colors.secondary)};
-      --brand-accent: ${safeCssColor(colors.accent)};
+      --brand-accent: ${safeCssColor(stylePreset.css.accentColor)};
       --client-accent: ${safeCssColor(clientAccent)};
       --page-bg: ${safeCssColor(colors.background)};
       --surface: ${safeCssColor(colors.surface)};
@@ -54,9 +59,12 @@ export function renderValueProposalHtml(
       --muted: ${safeCssColor(colors.mutedText)};
       --border: ${safeCssColor(colors.border)};
       --ink: #243041;
-      --deep: #083d5a;
-      --deep-2: #0c5a7d;
+      --deep: ${safeCssColor(stylePreset.css.accentColor)};
+      --deep-2: ${safeCssColor(stylePreset.css.accentColor)};
       --ice: #eaf6fd;
+      --cover-min-height: ${escapeHtml(stylePreset.layout.coverHeight)};
+      --card-radius: ${escapeHtml(stylePreset.css.borderRadius)};
+      --metric-columns: ${String(stylePreset.layout.metricStripColumns)};
     }
 
     @page {
@@ -69,7 +77,7 @@ export function renderValueProposalHtml(
     html {
       color: var(--ink);
       background: #f6f8fb;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: ${escapeHtml(stylePreset.css.fontFamily)};
       line-height: 1.42;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
@@ -84,8 +92,8 @@ export function renderValueProposalHtml(
 
     .page {
       background: var(--surface);
-      min-height: 1056px;
-      padding: 70px 68px 54px;
+      min-height: var(--cover-min-height);
+      padding: ${escapeHtml(stylePreset.css.pagePadding)};
       page-break-after: always;
       position: relative;
     }
@@ -94,11 +102,11 @@ export function renderValueProposalHtml(
 
     .cover {
       background:
-        radial-gradient(circle at 96% 6%, rgba(125, 211, 252, 0.16), transparent 28rem),
-        linear-gradient(158deg, #052f45 0%, #063e5c 54%, #0b6388 100%);
+        ${escapeHtml(stylePreset.css.coverGradient)};
       color: #f8fcff;
       display: grid;
       grid-template-rows: auto 1fr auto;
+      min-height: var(--cover-min-height);
       overflow: hidden;
     }
 
@@ -195,7 +203,7 @@ export function renderValueProposalHtml(
 
     h2 {
       color: #222c3a;
-      font-size: 28px;
+      font-size: ${escapeHtml(stylePreset.css.headingScale)};
       letter-spacing: -0.035em;
       line-height: 1.25;
       margin: 12px 0 12px;
@@ -210,7 +218,7 @@ export function renderValueProposalHtml(
 
     .lead {
       color: #44546a;
-      font-size: 16px;
+      font-size: ${escapeHtml(stylePreset.css.bodyScale)};
       line-height: 1.6;
       margin-bottom: 18px;
     }
@@ -246,9 +254,9 @@ export function renderValueProposalHtml(
 
     .metric-strip {
       border: 1px solid rgba(211, 238, 250, 0.22);
-      border-radius: 18px;
+      border-radius: var(--card-radius);
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(var(--metric-columns), 1fr);
       margin-top: 46px;
       overflow: hidden;
     }
@@ -507,7 +515,7 @@ export function renderValueProposalHtml(
 
     .card {
       border: 1px solid #dbe4ee;
-      border-radius: 16px;
+      border-radius: var(--card-radius);
       padding: 18px;
     }
 
@@ -570,7 +578,7 @@ export function renderValueProposalHtml(
 
     .phase-card {
       border: 1px solid #dbe4ee;
-      border-radius: 18px;
+      border-radius: var(--card-radius);
       overflow: hidden;
       position: relative;
     }

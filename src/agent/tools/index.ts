@@ -23,6 +23,7 @@ import { applyBrand } from "./applyBrand.js";
 import { reviseSectionCopy } from "./reviseSectionCopy.js";
 import { generateValueTableFromInputs } from "./generateValueTableFromInputs.js";
 import { generatePhasePlanFromScope } from "./generatePhasePlanFromScope.js";
+import { applyStylePreset } from "./applyStylePreset.js";
 
 export function createScopeForgeTools(deps: ToolDeps): AgentTool[] {
   const resolved = resolveToolDeps(deps);
@@ -41,6 +42,7 @@ export function createScopeForgeTools(deps: ToolDeps): AgentTool[] {
     reviseSectionCopy(resolved),
     generateValueTableFromInputs(resolved),
     generatePhasePlanFromScope(resolved),
+    applyStylePreset(resolved),
   ];
 }
 
@@ -59,6 +61,7 @@ export {
   reviseSectionCopy,
   generateValueTableFromInputs,
   generatePhasePlanFromScope,
+  applyStylePreset,
 };
 export {
   defaultPdfRenderer,

@@ -434,6 +434,8 @@ export interface ProposalRequestBody {
   readonly brand?: ProposalBrand;
   readonly audience?: ProposalAudience;
   readonly displayName?: string;
+  /** Style preset ID to apply during rendering. */
+  readonly stylePresetId?: string;
 }
 
 export async function previewProposal(

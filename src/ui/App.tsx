@@ -17,6 +17,7 @@ import {
   fetchProposalProjects,
   fetchProposalProjectState,
   fetchProposalProjectUpdates,
+  ingestSourceMaterial,
   type CreateProposalProjectResponse,
   type HealthResponse,
   type ProposalProjectListItemResponse,
@@ -50,6 +51,8 @@ export function App(): JSX.Element {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedProjectVersionId, setSelectedProjectVersionId] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState("");
+  const [stylePresetId, setStylePresetId] = useState<string | undefined>(undefined);
+  const [extractingStyle, setExtractingStyle] = useState(false);
   const lastAppliedSnapshotRef = useRef<string | null>(null);
   const agent = useAgentStream();
   const collaboratorDisplayName = displayName.trim();
@@ -160,6 +163,33 @@ export function App(): JSX.Element {
   const handleProjectConflict = useCallback((conflict: ProjectConflictNotice): void => {
     setProjectConflict(conflict);
   }, []);
+
+  const handleStylePresetUpload = useCallback(async (file: File): Promise<void> => {
+    setExtractingStyle(true);
+    try {
+      const result = await ingestSourceMaterial({
+        sourceKind: "pdf",
+        file: {
+          name: file.name,
+          ...(file.type.length === 0 ? {} : { mediaType: file.type }),
+          base64: await fileToBase64(file),
+        },
+      });
+      if (!result.ok) return;
+      const { extractStyleFromText } = await import("../proposal/extractStyle.js");
+      const preset = extractStyleFromText(result.value.document.text, {
+        presetName: file.name.replace(/\.pdf$/i, ""),
+        sourcePath: file.name,
+      });
+      agent.send(`I uploaded a reference PDF (\"${file.name}\") for style matching. ` +
+        `Extracted ${preset.sections.length} sections with ${preset.tone.formality} tone. ` +
+        `Please apply this style to the current proposal draft.`);
+    } catch (error) {
+      agent.send(`Style extraction failed: ${error instanceof Error ? error.message : String(error)}. Please try again or select a built-in style preset.`);
+    } finally {
+      setExtractingStyle(false);
+    }
+  }, [agent]);
 
   const refreshLatestProject = useCallback(async (): Promise<void> => {
     if (selectedProjectId === null) return;
@@ -369,6 +399,10 @@ export function App(): JSX.Element {
               busy={agent.status !== "idle"}
               vendorBrand={vendorBrand}
               displayName={authorDisplayName}
+              stylePresetId={stylePresetId}
+              extractingStyle={extractingStyle}
+              onStylePresetChange={(id) => setStylePresetId(id ?? undefined)}
+              onUploadReference={(file) => void handleStylePresetUpload(file)}
               onProjectConflict={handleProjectConflict}
               onProjectUpdated={handleProjectActivityUpdated}
               onProjectActivitySaved={() => void refreshLatestProject()}
@@ -455,4 +489,25 @@ function compareProjectListItems(
   const title = left.title.localeCompare(right.title);
   if (title !== 0) return title;
   return left.projectId.localeCompare(right.projectId);
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read file."));
+    reader.onload = () => {
+      if (!(reader.result instanceof ArrayBuffer)) {
+        reject(new Error("Could not read file as bytes."));
+        return;
+      }
+      let binary = "";
+      const bytes = new Uint8Array(reader.result);
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+      }
+      resolve(btoa(binary));
+    };
+    reader.readAsArrayBuffer(file);
+  });
 }

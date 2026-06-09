@@ -137,6 +137,8 @@ export interface ProposalDraft {
   readonly metadata: ProposalDraftMetadata;
   readonly preparedFor: PreparedFor;
   readonly details: ProposalDetails;
+  /** Active style preset ID. When absent, the renderer uses the default (Triten) style. */
+  readonly stylePresetId?: string;
   readonly valueProposal: ProposalDraftValueProposal;
   readonly buildPlan: readonly ProposalBuildPlanStep[];
   readonly actualDeliverables: readonly ProposalActualDeliverable[];

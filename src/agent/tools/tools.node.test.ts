@@ -102,6 +102,7 @@ describe("createScopeForgeTools", () => {
         "revise_section_copy",
         "generate_value_table_from_inputs",
         "generate_phase_plan_from_scope",
+        "apply_style_preset",
       ]),
     );
   });

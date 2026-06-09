@@ -27,6 +27,7 @@ export interface DraftSnapshot {
   readonly nextSteps: readonly string[];
   readonly audience: ProposalAudience;
   readonly brandId: string;
+  readonly stylePresetId?: string;
 }
 
 export interface EconomicsSnapshot {
@@ -66,6 +67,8 @@ export interface SessionSnapshot {
   readonly validation: ValidationSnapshot;
   /** Full draft for deterministic preview/export round-trips. */
   readonly fullDraft: ProposalDraft;
+  /** Active style preset ID. */
+  readonly stylePresetId?: string;
 }
 
 /** Server-sent event frames over POST /api/agent/messages. */

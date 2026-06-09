@@ -5,6 +5,7 @@ import { ScrollArea } from "../components/ui/scroll-area.js";
 import { PriceCard } from "./PriceCard.js";
 import { GuardrailList } from "./GuardrailList.js";
 import { PreviewExportBar } from "./PreviewExportBar.js";
+import { StylePresetSelector } from "./StylePresetSelector.js";
 import type { ProjectConflictNotice } from "../lib/collaboration.js";
 import type { SessionSnapshot } from "../lib/types.js";
 import type { ProposalProject } from "../../project/types.js";
@@ -16,6 +17,10 @@ export interface DraftPanelProps {
   readonly busy: boolean;
   readonly vendorBrand: ProposalBrand | null;
   readonly displayName: string | null;
+  readonly stylePresetId?: string | undefined;
+  readonly extractingStyle?: boolean | undefined;
+  readonly onStylePresetChange?: ((presetId: string | null) => void) | undefined;
+  readonly onUploadReference?: ((file: File) => void) | undefined;
   readonly onProjectConflict?: ((conflict: ProjectConflictNotice) => void) | undefined;
   readonly onProjectUpdated?: ((project: ProposalProject) => void) | undefined;
   readonly onProjectActivitySaved?: (() => void) | undefined;
@@ -36,6 +41,10 @@ export function DraftPanel({
   busy,
   vendorBrand,
   displayName,
+  stylePresetId,
+  extractingStyle,
+  onStylePresetChange,
+  onUploadReference,
   onProjectConflict,
   onProjectUpdated,
   onProjectActivitySaved,
@@ -83,6 +92,16 @@ export function DraftPanel({
               )}
             </CardContent>
           </Card>
+
+          {(onStylePresetChange !== undefined || onUploadReference !== undefined) && (
+            <StylePresetSelector
+              selectedPresetId={stylePresetId}
+              disabled={busy}
+              extracting={extractingStyle}
+              onPresetChange={onStylePresetChange ?? (() => {})}
+              onUploadReference={onUploadReference}
+            />
+          )}
 
           <PriceCard economics={economics} />
 
