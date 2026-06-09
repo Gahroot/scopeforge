@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   WebsiteBrandFetchError,
   extractWebsiteBrand as extractWebsiteBrandFromUrl,
@@ -29,8 +30,10 @@ import { addBreadcrumb, logError, logEvent } from "../diagnostics/logger.node.js
 import {
   analyzeProject,
   DEFAULT_ITERATIONS,
+  runSensitivity,
   type AnalyzeOptions,
   type Project,
+  type SensitivityInput,
 } from "../core/index.js";
 import { validateProject } from "../data/schema.js";
 import {
@@ -100,6 +103,9 @@ import { renderValueProposalHtml } from "../render/valueProposalHtml.js";
 import { resolveStylePreset } from "../proposal/presets.js";
 import type { StylePreset } from "../proposal/stylePreset.js";
 import type { ProposalAgentStreamRunner } from "./agentStream.node.js";
+import { ShareTokenStore, type ShareToken, toShareToken } from "../project/shareStore.js";
+import { EngagementTracker, validateEngagementEvent, type EngagementEvent } from "./trackingStore.js";
+import { buildTrackingScript } from "./trackingScript.js";
 
 const API_PREFIX = "/api";
 const DEFAULT_BRAND_ID = "nolan";
@@ -237,6 +243,8 @@ export interface AppRouteDependencies {
   readonly pendingAnthropicOAuth?: Map<string, PendingAnthropicOAuth>;
   readonly startOpenAIOAuth?: (input: { readonly credentialsStore: AgentCredentialsStore }) => Promise<PendingOpenAIOAuth>;
   readonly runProposalAgentStream?: ProposalAgentStreamRunner;
+  readonly shareStore?: ShareTokenStore;
+  readonly engagementTracker?: EngagementTracker;
 }
 
 interface ResolvedProposalDocument {
@@ -275,7 +283,9 @@ type ProposalProjectRoute =
   | { readonly action: "updates"; readonly projectId: ProposalProjectId }
   | { readonly action: "preview"; readonly projectId: ProposalProjectId }
   | { readonly action: "exportPdf"; readonly projectId: ProposalProjectId }
-  | { readonly action: "importBrand"; readonly projectId: ProposalProjectId };
+  | { readonly action: "importBrand"; readonly projectId: ProposalProjectId }
+  | { readonly action: "share"; readonly projectId: ProposalProjectId }
+  | { readonly action: "analytics"; readonly projectId: ProposalProjectId };
 
 interface LoadedProposalProject {
   readonly store: ProposalProjectStore;
@@ -346,12 +356,27 @@ export async function handleApiRoute(
   if (request.method === "POST" && pathname === "/api/proposals/analyze") {
     return analyzeProposalResponse(request.body);
   }
+  if (request.method === "POST" && pathname === "/api/sensitivity") {
+    return sensitivityResponse(request.body);
+  }
   if (request.method === "POST" && pathname === "/api/proposals/preview") {
     return previewProposalResponse(request.body);
   }
   if (request.method === "POST" && pathname === "/api/proposals/export-pdf") {
     return exportProposalPdfResponse(request.body, request.signal, dependencies);
   }
+
+  // Share & view routes
+  const viewRoute = parseViewRoute(pathname);
+  if (viewRoute !== null) {
+    addBreadcrumb("scopeforge.route.view", {
+      method: request.method,
+      pathname,
+      action: viewRoute.action,
+    });
+    return handleViewRoute(viewRoute, request, dependencies);
+  }
+
   if (request.method === "POST" && pathname === "/api/brand/from-website") {
     return reservedEndpointResponse(
       "brand_fetch_not_configured",
@@ -446,6 +471,22 @@ async function handleProposalProjectRoute(
       return methodNotAllowedResponse(
         "POST",
         "Proposal project brand imports require a POST request.",
+      );
+    case "share":
+      if (request.method === "POST") {
+        return createShareTokenResponse(route.projectId, dependencies);
+      }
+      return methodNotAllowedResponse(
+        "POST",
+        "Share token creation requires a POST request.",
+      );
+    case "analytics":
+      if (request.method === "GET") {
+        return projectAnalyticsResponse(route.projectId, dependencies);
+      }
+      return methodNotAllowedResponse(
+        "GET",
+        "Project analytics is read-only.",
       );
   }
 }
@@ -1924,6 +1965,10 @@ function parseProposalProjectRoute(pathname: string): ProposalProjectRoute | nul
     case "export":
     case "export-pdf":
       return { action: "exportPdf", projectId };
+    case "share":
+      return { action: "share", projectId };
+    case "analytics":
+      return { action: "analytics", projectId };
     default:
       return null;
   }
@@ -2806,6 +2851,62 @@ function analyzeProposalResponse(input: unknown): ApiRouteResponse {
   });
 }
 
+function sensitivityResponse(input: unknown): ApiRouteResponse {
+  if (!isRecord(input)) {
+    return failureResponse(
+      400,
+      "sensitivity_request_invalid",
+      "Sensitivity request body must be a JSON object with project and sensitivity fields.",
+    );
+  }
+
+  const projectResult = resolveProjectInput(input.project ?? input);
+  if (!projectResult.ok) return projectResult.response;
+
+  const sensitivityResult = resolveSensitivityInput(input);
+  if (!sensitivityResult.ok) return sensitivityResult.response;
+
+  try {
+    const result = runSensitivity(projectResult.value, sensitivityResult.value);
+    return jsonResponse(200, { ok: true, result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return failureResponse(422, "sensitivity_failed", message);
+  }
+}
+
+function resolveSensitivityInput(
+  input: Readonly<Record<string, unknown>>,
+): RouteValueResult<SensitivityInput> {
+  const rawSensitivity = input.sensitivity;
+  if (!isRecord(rawSensitivity)) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "sensitivity_input_invalid",
+        "sensitivity must be an object with param, min, max, and steps.",
+      ),
+    );
+  }
+
+  const param = typeof rawSensitivity.param === "string" ? rawSensitivity.param.trim() : "";
+  if (param.length === 0) {
+    return routeFailure(
+      failureResponse(400, "sensitivity_param_invalid", "sensitivity.param must be a non-empty string."),
+    );
+  }
+
+  const base = typeof rawSensitivity.base === "number" ? rawSensitivity.base : 0;
+  const min = typeof rawSensitivity.min === "number" ? rawSensitivity.min : 0;
+  const max = typeof rawSensitivity.max === "number" ? rawSensitivity.max : 1;
+  const steps = typeof rawSensitivity.steps === "number" ? rawSensitivity.steps : 11;
+
+  return {
+    ok: true,
+    value: { param, base, min, max, steps },
+  };
+}
+
 function previewProposalResponse(input: unknown): ApiRouteResponse {
   const bundle = buildProposalRenderBundle(input);
   if (!bundle.ok) return bundle.response;
@@ -3314,4 +3415,182 @@ function pdfRenderFailureResponse(error: unknown): ApiRouteResponse {
 
 function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+
+// ---------------------------------------------------------------------------
+// Share token, view, and tracking routes
+// ---------------------------------------------------------------------------
+
+type ViewRoute =
+  | { readonly action: "view"; readonly token: ShareToken }
+  | { readonly action: "track"; readonly token: ShareToken };
+
+function parseViewRoute(pathname: string): ViewRoute | null {
+  // /api/view/:token/track  OR  /api/view/:token
+  const prefix = "/api/view/";
+  if (!pathname.startsWith(prefix)) return null;
+  const rest = pathname.slice(prefix.length);
+  const segments = rest.split("/").filter((s) => s.length > 0);
+  if (segments.length === 0 || segments.length > 2) return null;
+  const rawToken = segments[0];
+  if (rawToken === undefined) return null;
+  const token = toShareToken(decodeRouteSegment(rawToken) ?? rawToken);
+  if (segments.length === 2 && segments[1] === "track") {
+    return { action: "track", token };
+  }
+  if (segments.length === 1) {
+    return { action: "view", token };
+  }
+  return null;
+}
+
+async function handleViewRoute(
+  route: ViewRoute,
+  request: AppRouteRequest,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  switch (route.action) {
+    case "view":
+      if (request.method === "GET") {
+        return viewSharedProposalResponse(route.token, dependencies);
+      }
+      return methodNotAllowedResponse("GET", "Shared proposal view is read-only.");
+    case "track":
+      if (request.method === "POST") {
+        return trackEngagementEventResponse(route.token, request.body, dependencies);
+      }
+      return methodNotAllowedResponse("POST", "Engagement tracking requires a POST request.");
+  }
+}
+
+async function createShareTokenResponse(
+  projectId: ProposalProjectId,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const loaded = await loadProposalProject(projectId, dependencies);
+  if (!loaded.ok) return loaded.response;
+
+  const currentVersion = currentProjectVersionResult(loaded.value.project);
+  if (!currentVersion.ok) return currentVersion.response;
+
+  const shareStore = dependencies.shareStore ?? createDefaultShareStore();
+  await shareStore.load();
+  const record = shareStore.create(projectId, currentVersion.value.versionId);
+  await shareStore.persist();
+
+  return jsonResponse(201, {
+    ok: true,
+    token: record.token,
+    url: `/view/${record.token}`,
+    projectId,
+    versionId: record.versionId,
+    createdAt: record.createdAt,
+  });
+}
+
+async function viewSharedProposalResponse(
+  token: ShareToken,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const shareStore = dependencies.shareStore ?? createDefaultShareStore();
+  await shareStore.load();
+  const record = shareStore.get(token);
+  if (record === null) {
+    return failureResponse(404, "share_token_not_found", "Share token is invalid or has expired.");
+  }
+
+  const store = await loadProposalProjectStore(dependencies);
+  if (!store.ok) return store.response;
+
+  const project = store.value.get(record.projectId);
+  if (project === null) {
+    return failureResponse(404, "project_not_found", "The shared proposal project no longer exists.");
+  }
+
+  const version = project.versions.find((v) => v.versionId === record.versionId);
+  if (version === undefined) {
+    return failureResponse(
+      404,
+      "version_not_found",
+      "The shared proposal version no longer exists.",
+    );
+  }
+
+  const brand = version.sourceOfTruth.vendorBrand;
+  const html = renderValueProposalHtml(version.sourceOfTruth.draft, { brand });
+  const trackedHtml = html.replace(
+    /<\/body>/,
+    `${buildTrackingScript(String(token))}\n</body>`,
+  );
+
+  // Record viewed event (fire-and-forget)
+  const tracker = dependencies.engagementTracker ?? createDefaultEngagementTracker();
+  void tracker.record(token, {
+    event: "viewed",
+    ts: new Date().toISOString(),
+    viewerId: `server-${randomUUID()}`,
+  });
+
+  const bytes = new TextEncoder().encode(trackedHtml);
+  return {
+    kind: "binary",
+    status: 200,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Length": String(bytes.byteLength),
+      "X-Content-Type-Options": "nosniff",
+    },
+    body: bytes,
+  };
+}
+
+async function trackEngagementEventResponse(
+  token: ShareToken,
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const shareStore = dependencies.shareStore ?? createDefaultShareStore();
+  await shareStore.load();
+  const record = shareStore.get(token);
+  if (record === null) {
+    return failureResponse(404, "share_token_not_found", "Share token is invalid or has expired.");
+  }
+
+  const validation = validateEngagementEvent(input);
+  if (!validation.ok) {
+    return failureResponse(400, "engagement_event_invalid", validation.error);
+  }
+
+  const tracker = dependencies.engagementTracker ?? createDefaultEngagementTracker();
+  await tracker.record(token, validation.value);
+
+  return jsonResponse(200, { ok: true });
+}
+
+async function projectAnalyticsResponse(
+  projectId: ProposalProjectId,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const loaded = await loadProposalProject(projectId, dependencies);
+  if (!loaded.ok) return loaded.response;
+
+  const shareStore = dependencies.shareStore ?? createDefaultShareStore();
+  await shareStore.load();
+  const tracker = dependencies.engagementTracker ?? createDefaultEngagementTracker();
+  const analytics = await tracker.getAnalytics(projectId, shareStore);
+
+  return jsonResponse(200, {
+    ok: true,
+    projectId,
+    ...analytics,
+  });
+}
+
+function createDefaultShareStore(): ShareTokenStore {
+  return new ShareTokenStore();
+}
+
+function createDefaultEngagementTracker(): EngagementTracker {
+  return new EngagementTracker();
 }
