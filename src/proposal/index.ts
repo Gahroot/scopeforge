@@ -24,6 +24,8 @@ export type {
   ProposalPricingPhase,
   ProposalRenderOptions,
   ProposalScopeItem,
+  ProposalTemplate,
+  ProposalTemplateWithDraft,
   ProposalTerms,
   ProposalValidationError,
   ProposalValueSourceConfidence,
@@ -104,3 +106,10 @@ export {
   updateDraftValueSource,
   updateProposalDraft,
 } from "./draftStore.js";
+export {
+  createTemplateStore,
+  type SaveTemplateInput,
+  type TemplateSearchOptions,
+  type TemplateStore,
+  type TemplateStoreOptions,
+} from "./templateStore.js";

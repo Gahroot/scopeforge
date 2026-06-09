@@ -1,0 +1,221 @@
+{
+  "templateId": "built-in/automation-pipeline",
+  "name": "Data & Process Automation Pipeline",
+  "description": "Proposal template for workflow automation, data pipeline builds, and process optimization projects. Covers audit, pipeline design, implementation, and monitoring.",
+  "category": "Automation",
+  "builtIn": true,
+  "author": "ScopeForge",
+  "tags": ["automation", "pipeline", "workflow", "etl", "data-engineering", "process-optimization"],
+  "draft": {
+    "project": {
+      "project": "{{PROJECT_NAME}}",
+      "client": {
+        "sizeHeadcount": 120,
+        "buyerRole": "Director of Operations",
+        "workingWeeks": 46
+      },
+      "cost": {
+        "blendedRate": { "optimistic": 115, "likely": 148, "pessimistic": 190 },
+        "margin": 0.4,
+        "workstreams": [
+          {
+            "name": "Process audit & automation mapping",
+            "hours": { "optimistic": 16, "likely": 24, "pessimistic": 38 },
+            "aiFactor": 1,
+            "judgment": true
+          },
+          {
+            "name": "Pipeline architecture & design",
+            "hours": { "optimistic": 20, "likely": 32, "pessimistic": 50 },
+            "aiFactor": 0.6,
+            "judgment": false
+          },
+          {
+            "name": "Automation implementation",
+            "hours": { "optimistic": 50, "likely": 78, "pessimistic": 115 },
+            "aiFactor": 0.45,
+            "judgment": false
+          },
+          {
+            "name": "Monitoring, alerting & documentation",
+            "hours": { "optimistic": 14, "likely": 22, "pessimistic": 36 },
+            "aiFactor": 0.7,
+            "judgment": false
+          }
+        ]
+      },
+      "value": {
+        "realizationFactor": { "low": 0.45, "high": 0.6 },
+        "segments": [
+          { "role": "Operations staff", "headcount": 8, "hoursPerWeek": 2, "loadedRate": 55 },
+          { "role": "Data analysts", "headcount": 3, "hoursPerWeek": 4, "loadedRate": 80 },
+          { "role": "Managers", "headcount": 4, "hoursPerWeek": 1, "loadedRate": 95 }
+        ],
+        "workflows": [
+          { "name": "Repetitive task elimination", "low": 25000, "high": 55000 },
+          { "name": "Error reduction & rework avoidance", "low": 10000, "high": 30000 }
+        ],
+        "futureUpside": [
+          { "name": "Intelligent process optimization", "low": 40000, "high": 90000 }
+        ]
+      },
+      "pricing": {
+        "valueFraction": { "low": 0.12, "high": 0.22 },
+        "tiers": [
+          { "name": "Process Audit & Roadmap", "price": 12000 },
+          { "name": "Core Automation Build", "price": 65000 },
+          { "name": "Full Pipeline with Monitoring", "price": 110000 }
+        ]
+      }
+    },
+    "templateIds": ["built-in/automation-pipeline"],
+    "metadata": {
+      "draftId": "tpl-automation-pipeline",
+      "version": 1,
+      "status": "draft",
+      "source": "template-gallery"
+    },
+    "preparedFor": {
+      "companyName": "{{COMPANY_NAME}}"
+    },
+    "details": {
+      "title": "Automation Pipeline Proposal",
+      "subtitle": "Eliminate repetitive work and build resilient, observable data pipelines",
+      "recommendation": "Start with the highest-volume manual process to maximize ROI, then expand automation across the operation.",
+      "executiveSummary": [
+        "Your operations team spends significant hours on repetitive, rule-based tasks that are ideal automation candidates.",
+        "A structured automation pipeline reduces errors, frees staff for higher-value work, and scales with your growth.",
+        "We recommend a phased approach: audit & roadmap → core automation → full pipeline with monitoring."
+      ],
+      "whatWeHeard": [
+        "Operations staff spend 30%+ of their time on repetitive manual tasks.",
+        "Data errors from manual processes cause costly rework.",
+        "Leadership wants to scale operations without proportionally growing headcount."
+      ],
+      "investmentSummary": "Total investment ranges from $65K for core automation to $110K for the full pipeline with monitoring, with measurable savings within the first quarter."
+    },
+    "valueProposal": {
+      "headline": "Automate the repetitive, scale the valuable",
+      "narrative": "By automating rule-based processes and building resilient data pipelines, your team eliminates hours of manual work while reducing errors and enabling scalable growth.",
+      "unlocks": [
+        "Repetitive task elimination — reclaim 800+ hours annually across your operations team",
+        "Error reduction — automated pipelines eliminate manual data entry mistakes",
+        "Scalable operations — handle 2x volume without 2x headcount"
+      ],
+      "valueSources": [
+        {
+          "label": "Manual task elimination",
+          "source": "Operations staff",
+          "currentState": "8 staff spending 2+ hours/week on repetitive data entry and reconciliation",
+          "futureState": "Automated pipeline handles data flow; staff focuses on exception handling and analysis",
+          "annualValue": { "low": 25000, "high": 55000 },
+          "confidence": "high"
+        },
+        {
+          "label": "Error reduction & rework avoidance",
+          "source": "Managers & analysts",
+          "currentState": "Manual processes produce 5-8% error rate requiring weekly rework",
+          "futureState": "Automated validation catches errors at ingestion; <1% error rate",
+          "annualValue": { "low": 12000, "high": 30000 },
+          "confidence": "medium"
+        }
+      ],
+      "sixMonthSavings": { "low": 18000, "high": 40000 },
+      "annualValueTarget": 55000
+    },
+    "buildPlan": [
+      {
+        "name": "Process audit & mapping",
+        "timing": "Weeks 1–2",
+        "description": "Map current manual processes, identify automation candidates, and prioritize by ROI.",
+        "activities": ["Process walkthrough", "Time-motion analysis", "Automation opportunity scoring"],
+        "outcomes": ["Process map", "Automation priority list", "ROI estimates per process"]
+      },
+      {
+        "name": "Pipeline architecture & design",
+        "timing": "Weeks 3–4",
+        "description": "Design the automation architecture, data flow, error handling, and monitoring approach.",
+        "activities": ["Architecture design", "Data flow modeling", "Error handling strategy"],
+        "outcomes": ["Architecture doc", "Data flow diagrams", "Error handling playbook"]
+      },
+      {
+        "name": "Core automation implementation",
+        "timing": "Weeks 5–9",
+        "description": "Build and test the top-priority automation pipelines with robust error handling.",
+        "activities": ["Pipeline development", "Integration testing", "User acceptance testing"],
+        "outcomes": ["Working automation pipelines", "Test results", "UAT sign-off"]
+      },
+      {
+        "name": "Monitoring & documentation",
+        "timing": "Weeks 10–12",
+        "description": "Add monitoring, alerting, and runbooks for ongoing pipeline health.",
+        "activities": ["Monitoring setup", "Alert configuration", "Documentation"],
+        "outcomes": ["Monitoring dashboard", "Alert runbooks", "Admin documentation"]
+      }
+    ],
+    "actualDeliverables": [
+      {
+        "title": "Process audit report",
+        "description": "Detailed analysis of current processes with automation recommendations and ROI projections.",
+        "included": ["Current-state process map", "Automation opportunity matrix", "ROI projections"],
+        "acceptanceCriteria": ["All major processes documented", "ROI projections validated with stakeholders"]
+      },
+      {
+        "title": "Automation pipelines",
+        "description": "Production-ready automation pipelines with error handling, logging, and retry logic.",
+        "included": ["Pipeline code", "Configuration", "Test suite"],
+        "acceptanceCriteria": ["All pipelines pass acceptance tests", "Error handling works as documented"]
+      },
+      {
+        "title": "Monitoring & alerting",
+        "description": "Observability stack for pipeline health, with alerts for failures and performance degradation.",
+        "included": ["Monitoring dashboards", "Alert rules", "Escalation procedures"],
+        "acceptanceCriteria": ["Alerts fire correctly in test scenarios"]
+      },
+      {
+        "title": "Operations runbook",
+        "description": "Documentation for operations team to manage, troubleshoot, and extend the automation.",
+        "included": ["Admin guide", "Troubleshooting guide", "Extension playbook"],
+        "acceptanceCriteria": ["Ops team can independently manage pipelines"]
+      }
+    ],
+    "pricing": {
+      "summary": "Phased investment with clear ROI at each milestone. Core automation at $65K; full pipeline at $110K.",
+      "phases": [
+        { "name": "Process Audit & Roadmap", "price": 12000 },
+        { "name": "Core Automation Build", "price": 65000 },
+        { "name": "Full Pipeline with Monitoring", "price": 110000 }
+      ]
+    },
+    "terms": {
+      "paymentTerms": "40% upon signing, 30% at core automation delivery, 30% at final handoff.",
+      "startConditions": ["Access to current process documentation and systems", "Designated operations lead for process walkthroughs"],
+      "assumptions": [
+        "Current processes follow documented or explainable rules.",
+        "Systems involved have APIs or data export capabilities.",
+        "The team can dedicate time for UAT during implementation."
+      ],
+      "exclusions": [
+        "Third-party automation platform licensing fees.",
+        "Infrastructure hosting costs beyond initial pipeline deployment.",
+        "Processes requiring human judgment that cannot be codified."
+      ],
+      "clientResponsibilities": [
+        "Provide process documentation and system access.",
+        "Participate in process walkthroughs and UAT.",
+        "Approve automation rules before implementation begins."
+      ],
+      "changeControl": "Additional processes beyond the agreed scope are quoted separately after the audit phase.",
+      "expiration": "This proposal is valid for 30 days from the date of issue."
+    },
+    "footer": {
+      "confidentiality": "This proposal is confidential and prepared exclusively for {{COMPANY_NAME}}.",
+      "contact": "Questions? Reach out to your ScopeForge account team."
+    },
+    "nextSteps": [
+      "Schedule a process walkthrough session with your operations team.",
+      "Share any existing process documentation or SOPs.",
+      "Confirm access to the systems involved in the target processes."
+    ]
+  }
+}

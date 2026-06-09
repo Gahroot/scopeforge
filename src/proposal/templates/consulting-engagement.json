@@ -1,0 +1,221 @@
+{
+  "templateId": "built-in/consulting-engagement",
+  "name": "General Consulting Engagement",
+  "description": "Versatile proposal template for strategic consulting engagements — workshops, assessments, roadmaps, and advisory programs. Adaptable to technology, operations, and digital transformation contexts.",
+  "category": "Consulting",
+  "builtIn": true,
+  "author": "ScopeForge",
+  "tags": ["consulting", "advisory", "workshop", "assessment", "strategy", "roadmap", "transformation"],
+  "draft": {
+    "project": {
+      "project": "{{PROJECT_NAME}}",
+      "client": {
+        "sizeHeadcount": 200,
+        "buyerRole": "Chief Strategy Officer",
+        "workingWeeks": 46
+      },
+      "cost": {
+        "blendedRate": { "optimistic": 130, "likely": 170, "pessimistic": 220 },
+        "margin": 0.45,
+        "workstreams": [
+          {
+            "name": "Stakeholder interviews & discovery",
+            "hours": { "optimistic": 12, "likely": 20, "pessimistic": 32 },
+            "aiFactor": 1,
+            "judgment": true
+          },
+          {
+            "name": "Assessment & analysis",
+            "hours": { "optimistic": 20, "likely": 34, "pessimistic": 52 },
+            "aiFactor": 0.7,
+            "judgment": false
+          },
+          {
+            "name": "Strategy development & roadmap",
+            "hours": { "optimistic": 16, "likely": 26, "pessimistic": 40 },
+            "aiFactor": 1,
+            "judgment": true
+          },
+          {
+            "name": "Workshop facilitation & delivery",
+            "hours": { "optimistic": 10, "likely": 16, "pessimistic": 26 },
+            "aiFactor": 1,
+            "judgment": true
+          }
+        ]
+      },
+      "value": {
+        "realizationFactor": { "low": 0.4, "high": 0.55 },
+        "segments": [
+          { "role": "Leadership team", "headcount": 5, "hoursPerWeek": 2, "loadedRate": 175 },
+          { "role": "Middle management", "headcount": 10, "hoursPerWeek": 1.5, "loadedRate": 85 },
+          { "role": "Operations leads", "headcount": 6, "hoursPerWeek": 2, "loadedRate": 70 }
+        ],
+        "workflows": [
+          { "name": "Strategic decision acceleration", "low": 15000, "high": 40000 },
+          { "name": "Initiative prioritization efficiency", "low": 10000, "high": 25000 }
+        ],
+        "futureUpside": [
+          { "name": "Revenue growth from strategic alignment", "low": 50000, "high": 150000 }
+        ]
+      },
+      "pricing": {
+        "valueFraction": { "low": 0.08, "high": 0.15 },
+        "tiers": [
+          { "name": "Discovery & Assessment", "price": 18000 },
+          { "name": "Strategy & Roadmap", "price": 45000 },
+          { "name": "Advisory Program (3 months)", "price": 80000 }
+        ]
+      }
+    },
+    "templateIds": ["built-in/consulting-engagement"],
+    "metadata": {
+      "draftId": "tpl-consulting-engagement",
+      "version": 1,
+      "status": "draft",
+      "source": "template-gallery"
+    },
+    "preparedFor": {
+      "companyName": "{{COMPANY_NAME}}"
+    },
+    "details": {
+      "title": "Consulting Engagement Proposal",
+      "subtitle": "Strategic assessment, roadmap development, and advisory to accelerate your transformation",
+      "recommendation": "Begin with a focused discovery and assessment to build a shared fact base, then develop a prioritized roadmap aligned with your strategic objectives.",
+      "executiveSummary": [
+        "A structured consulting engagement gives your leadership team a clear, evidence-based view of where to invest for maximum impact.",
+        "We combine stakeholder insights with market analysis to produce an actionable roadmap — not just a slide deck.",
+        "The engagement is designed in phases so you can validate value before committing to the full program."
+      ],
+      "whatWeHeard": [
+        "Leadership needs a shared, evidence-based view of strategic priorities.",
+        "Multiple initiatives compete for limited resources without clear ROI comparisons.",
+        "The organization wants to move faster but needs alignment before scaling."
+      ],
+      "investmentSummary": "Total investment ranges from $45K for a focused strategy engagement to $80K for a 3-month advisory program, with actionable deliverables at each phase."
+    },
+    "valueProposal": {
+      "headline": "Align leadership on a shared, evidence-based strategic roadmap",
+      "narrative": "Our engagement gives your team a clear picture of where to invest, what to deprioritize, and how to sequence initiatives for maximum impact — built on stakeholder insight, not just frameworks.",
+      "unlocks": [
+        "Strategic clarity — a shared, data-backed view of priorities across leadership",
+        "Faster decisions — structured framework for initiative evaluation and trade-offs",
+        "Execution confidence — a roadmap with clear owners, timelines, and success metrics"
+      ],
+      "valueSources": [
+        {
+          "label": "Strategic decision acceleration",
+          "source": "Leadership team",
+          "currentState": "Leadership meetings spend hours debating priorities without shared data",
+          "futureState": "Decisions grounded in stakeholder data, market benchmarks, and ROI models",
+          "annualValue": { "low": 20000, "high": 50000 },
+          "confidence": "medium"
+        },
+        {
+          "label": "Initiative prioritization efficiency",
+          "source": "Middle management",
+          "currentState": "Teams pursue parallel initiatives without clear sequencing or trade-off criteria",
+          "futureState": "Prioritized roadmap with explicit dependencies and resource allocation",
+          "annualValue": { "low": 12000, "high": 30000 },
+          "confidence": "medium"
+        }
+      ],
+      "sixMonthSavings": { "low": 15000, "high": 35000 },
+      "annualValueTarget": 50000
+    },
+    "buildPlan": [
+      {
+        "name": "Stakeholder discovery",
+        "timing": "Weeks 1–2",
+        "description": "Interview key stakeholders to build a fact base of current-state challenges, opportunities, and strategic context.",
+        "activities": ["Stakeholder interviews", "Document review", "Current-state analysis"],
+        "outcomes": ["Stakeholder insight summary", "Current-state assessment", "Opportunity map"]
+      },
+      {
+        "name": "Assessment & analysis",
+        "timing": "Weeks 3–4",
+        "description": "Synthesize findings, benchmark against market data, and identify high-leverage opportunities.",
+        "activities": ["Data synthesis", "Market benchmarking", "Opportunity scoring"],
+        "outcomes": ["Assessment report", "Benchmark analysis", "Opportunity matrix"]
+      },
+      {
+        "name": "Strategy & roadmap development",
+        "timing": "Weeks 5–6",
+        "description": "Develop a prioritized roadmap with owners, timelines, and success metrics.",
+        "activities": ["Strategy workshops", "Roadmap prioritization", "Success metric definition"],
+        "outcomes": ["Strategic roadmap", "Initiative prioritization", "Measurement framework"]
+      },
+      {
+        "name": "Executive workshop & handoff",
+        "timing": "Week 7",
+        "description": "Facilitate an executive workshop to align on priorities and establish governance for execution.",
+        "activities": ["Executive workshop", "Governance model design", "Handoff preparation"],
+        "outcomes": ["Workshop output", "Governance model", "Execution playbook"]
+      }
+    ],
+    "actualDeliverables": [
+      {
+        "title": "Assessment report",
+        "description": "Comprehensive analysis of current-state challenges, opportunities, and benchmark data.",
+        "included": ["Stakeholder insight summary", "Benchmark data", "Gap analysis"],
+        "acceptanceCriteria": ["Findings validated with leadership team"]
+      },
+      {
+        "title": "Strategic roadmap",
+        "description": "Prioritized initiative roadmap with dependencies, owners, and resource requirements.",
+        "included": ["Initiative priorities", "Timeline & dependencies", "Resource estimates"],
+        "acceptanceCriteria": ["Leadership team endorses the prioritization"]
+      },
+      {
+        "title": "Executive workshop",
+        "description": "Facilitated session to align leadership on priorities and establish execution governance.",
+        "included": ["Workshop agenda", "Facilitation", "Workshop summary & action items"],
+        "acceptanceCriteria": ["Clear decisions documented", "Action items assigned"]
+      },
+      {
+        "title": "Execution playbook",
+        "description": "Guide for ongoing initiative management, including governance model and measurement framework.",
+        "included": ["Governance model", "Measurement framework", "Reporting templates"],
+        "acceptanceCriteria": ["Team can operate governance model independently"]
+      }
+    ],
+    "pricing": {
+      "summary": "Engagement phases aligned with deliverables. Strategy & Roadmap at $45K; full advisory at $80K.",
+      "phases": [
+        { "name": "Discovery & Assessment", "price": 18000 },
+        { "name": "Strategy & Roadmap", "price": 45000 },
+        { "name": "Advisory Program (3 months)", "price": 80000 }
+      ]
+    },
+    "terms": {
+      "paymentTerms": "40% upon signing, 30% at assessment delivery, 30% at workshop completion.",
+      "startConditions": ["Access to leadership team for interviews", "Relevant strategic documents and data"],
+      "assumptions": [
+        "Key stakeholders are available for 60-minute interviews during the discovery phase.",
+        "Leadership team participates in the executive workshop.",
+        "Historical performance data is available for benchmarking."
+      ],
+      "exclusions": [
+        "Implementation of recommended initiatives (separate engagement).",
+        "Ongoing advisory beyond the agreed program period.",
+        "Proprietary market research reports (available at cost if needed)."
+      ],
+      "clientResponsibilities": [
+        "Schedule and facilitate stakeholder interviews.",
+        "Provide access to strategic documents and performance data.",
+        "Ensure leadership team attends the executive workshop."
+      ],
+      "changeControl": "Scope adjustments during the engagement are handled via written agreement between the project leads.",
+      "expiration": "This proposal is valid for 30 days from the date of issue."
+    },
+    "footer": {
+      "confidentiality": "This proposal is confidential and prepared exclusively for {{COMPANY_NAME}}.",
+      "contact": "Questions? Reach out to your ScopeForge account team."
+    },
+    "nextSteps": [
+      "Schedule a 30-minute alignment call to review scope and timeline.",
+      "Share any existing strategic documents or assessments.",
+      "Confirm executive sponsor and stakeholder availability."
+    ]
+  }
+}

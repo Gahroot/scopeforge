@@ -1,0 +1,221 @@
+{
+  "templateId": "built-in/saas-dashboard",
+  "name": "SaaS Dashboard / Data Platform",
+  "description": "Proposal template for SaaS analytics dashboards, data platforms, and business intelligence builds. Covers data ingestion, modeling, visualization, and ongoing platform support.",
+  "category": "SaaS",
+  "builtIn": true,
+  "author": "ScopeForge",
+  "tags": ["saas", "dashboard", "data-platform", "analytics", "bi"],
+  "draft": {
+    "project": {
+      "project": "{{PROJECT_NAME}}",
+      "client": {
+        "sizeHeadcount": 50,
+        "buyerRole": "Head of Data",
+        "workingWeeks": 46
+      },
+      "cost": {
+        "blendedRate": { "optimistic": 120, "likely": 155, "pessimistic": 195 },
+        "margin": 0.4,
+        "workstreams": [
+          {
+            "name": "Data architecture & schema design",
+            "hours": { "optimistic": 20, "likely": 32, "pessimistic": 50 },
+            "aiFactor": 0.6,
+            "judgment": false
+          },
+          {
+            "name": "ETL pipeline development",
+            "hours": { "optimistic": 30, "likely": 48, "pessimistic": 72 },
+            "aiFactor": 0.5,
+            "judgment": false
+          },
+          {
+            "name": "Dashboard UI & visualization",
+            "hours": { "optimistic": 35, "likely": 52, "pessimistic": 78 },
+            "aiFactor": 0.55,
+            "judgment": false
+          },
+          {
+            "name": "QA, performance tuning & docs",
+            "hours": { "optimistic": 12, "likely": 20, "pessimistic": 34 },
+            "aiFactor": 1,
+            "judgment": true
+          }
+        ]
+      },
+      "value": {
+        "realizationFactor": { "low": 0.45, "high": 0.55 },
+        "segments": [
+          { "role": "Data analysts", "headcount": 4, "hoursPerWeek": 3, "loadedRate": 85 },
+          { "role": "Operations managers", "headcount": 3, "hoursPerWeek": 2, "loadedRate": 75 },
+          { "role": "Executives", "headcount": 2, "hoursPerWeek": 1, "loadedRate": 160 }
+        ],
+        "workflows": [
+          { "name": "Weekly reporting automation", "low": 8000, "high": 15000 },
+          { "name": "Ad-hoc analytics self-service", "low": 5000, "high": 12000 }
+        ],
+        "futureUpside": [
+          { "name": "Predictive analytics", "low": 20000, "high": 45000 }
+        ]
+      },
+      "pricing": {
+        "valueFraction": { "low": 0.12, "high": 0.22 },
+        "tiers": [
+          { "name": "Discovery & Design Sprint", "price": 15000 },
+          { "name": "MVP Dashboard Build", "price": 55000 },
+          { "name": "Full Platform Delivery", "price": 95000 }
+        ]
+      }
+    },
+    "templateIds": ["built-in/saas-dashboard"],
+    "metadata": {
+      "draftId": "tpl-saas-dashboard",
+      "version": 1,
+      "status": "draft",
+      "source": "template-gallery"
+    },
+    "preparedFor": {
+      "companyName": "{{COMPANY_NAME}}"
+    },
+    "details": {
+      "title": "SaaS Dashboard & Data Platform Proposal",
+      "subtitle": "End-to-end analytics platform — from ingestion to executive dashboards",
+      "recommendation": "Start with an MVP dashboard focused on your top 3 KPIs, then expand to full self-service analytics.",
+      "executiveSummary": [
+        "Your team spends significant time on manual reporting that could be automated with a purpose-built data platform.",
+        "An MVP dashboard delivering your highest-priority KPIs can prove ROI within the first quarter.",
+        "We propose a phased approach: discovery sprint → MVP build → full platform expansion."
+      ],
+      "whatWeHeard": [
+        "Reporting relies on manual exports and spreadsheet stitching.",
+        "Leadership wants real-time visibility into key metrics.",
+        "The team needs self-service analytics without engineering bottlenecks."
+      ],
+      "investmentSummary": "Total investment ranges from $55K for an MVP dashboard to $95K for the full platform, with clear milestones and acceptance criteria at each phase."
+    },
+    "valueProposal": {
+      "headline": "Automate reporting and unlock self-service analytics for your team",
+      "narrative": "By replacing manual data workflows with a purpose-built dashboard platform, your analysts and operators save hours every week while giving leadership real-time visibility.",
+      "unlocks": [
+        "Automated weekly reporting — eliminate 8+ hours of manual reconciliation",
+        "Self-service analytics — empower non-technical stakeholders to answer their own questions",
+        "Single source of truth — replace fragmented spreadsheets with a governed data layer"
+      ],
+      "valueSources": [
+        {
+          "label": "Weekly reporting automation",
+          "source": "Data analysts",
+          "currentState": "Manual exports, spreadsheet formulas, and email distribution each week",
+          "futureState": "Automated pipeline refreshes and scheduled dashboard delivery",
+          "annualValue": { "low": 15000, "high": 30000 },
+          "confidence": "high"
+        },
+        {
+          "label": "Self-service analytics",
+          "source": "Operations managers & executives",
+          "currentState": "Request ad-hoc reports from analysts; wait days for answers",
+          "futureState": "Point-and-click exploration of governed data sets",
+          "annualValue": { "low": 12000, "high": 25000 },
+          "confidence": "medium"
+        }
+      ],
+      "sixMonthSavings": { "low": 12000, "high": 25000 },
+      "annualValueTarget": 45000
+    },
+    "buildPlan": [
+      {
+        "name": "Discovery & data audit",
+        "timing": "Weeks 1–2",
+        "description": "Map existing data sources, define KPIs, and design the target schema and dashboard layout.",
+        "activities": ["Stakeholder interviews", "Source system audit", "Schema & wireframe design"],
+        "outcomes": ["Data architecture doc", "Dashboard wireframes", "Prioritized KPI list"]
+      },
+      {
+        "name": "MVP dashboard build",
+        "timing": "Weeks 3–6",
+        "description": "Build ETL pipelines and a working dashboard for the top 3 KPIs with live data.",
+        "activities": ["ETL pipeline development", "Dashboard implementation", "Data validation"],
+        "outcomes": ["Working dashboard with 3 KPIs", "Automated refresh pipeline", "Validation report"]
+      },
+      {
+        "name": "Platform expansion & polish",
+        "timing": "Weeks 7–10",
+        "description": "Extend to additional data sources, add self-service features, and performance-tune.",
+        "activities": ["Additional data sources", "Self-service UI features", "Performance optimization"],
+        "outcomes": ["Full dashboard suite", "Self-service analytics", "Performance benchmarks"]
+      },
+      {
+        "name": "Handoff & documentation",
+        "timing": "Weeks 11–12",
+        "description": "Transfer knowledge, deliver documentation, and set up ongoing support.",
+        "activities": ["Knowledge transfer sessions", "Documentation", "Support setup"],
+        "outcomes": ["Runbook & admin guide", "Training materials", "Support handoff"]
+      }
+    ],
+    "actualDeliverables": [
+      {
+        "title": "Data architecture & schema",
+        "description": "Complete data model and integration architecture for the analytics platform.",
+        "included": ["Schema documentation", "Data flow diagrams", "Source system mapping"],
+        "acceptanceCriteria": ["Schema covers all prioritized KPIs", "Data flow is documented end-to-end"]
+      },
+      {
+        "title": "ETL pipeline",
+        "description": "Automated data ingestion and transformation pipelines.",
+        "included": ["Pipeline code", "Transformation logic", "Refresh schedule"],
+        "acceptanceCriteria": ["Pipeline runs on schedule", "Data quality checks pass"]
+      },
+      {
+        "title": "Dashboard application",
+        "description": "Interactive dashboards with drill-down, filtering, and export capabilities.",
+        "included": ["Dashboard code", "Visualization components", "User guide"],
+        "acceptanceCriteria": ["All KPIs render correctly", "Load time under 3 seconds"]
+      },
+      {
+        "title": "Documentation & handoff",
+        "description": "Runbooks, admin guides, and training materials for ongoing operations.",
+        "included": ["Admin runbook", "User guide", "Training session"],
+        "acceptanceCriteria": ["Team can manage dashboard independently"]
+      }
+    ],
+    "pricing": {
+      "summary": "Phased investment with clear deliverables at each milestone. MVP at $55K; full platform at $95K.",
+      "phases": [
+        { "name": "Discovery & Design Sprint", "price": 15000 },
+        { "name": "MVP Dashboard Build", "price": 55000 },
+        { "name": "Full Platform Delivery", "price": 95000 }
+      ]
+    },
+    "terms": {
+      "paymentTerms": "50% upon contract signing, 25% at MVP delivery, 25% at final handoff.",
+      "startConditions": ["Access to source data systems", "Designated product owner for weekly check-ins"],
+      "assumptions": [
+        "Source data is accessible via available APIs or database connections.",
+        "Client provides feedback on wireframes within 3 business days.",
+        "Scope changes beyond the agreed KPIs are handled via change order."
+      ],
+      "exclusions": [
+        "Data source licensing or SaaS subscription costs.",
+        "Ongoing infrastructure hosting fees beyond the initial setup period.",
+        "Features not listed in the deliverables (e.g., mobile app, ML models)."
+      ],
+      "clientResponsibilities": [
+        "Provide data system access and credentials.",
+        "Attend weekly progress reviews.",
+        "Review and approve deliverables within 5 business days."
+      ],
+      "changeControl": "Scope changes requested after the discovery sprint are handled via a written change order with updated timeline and pricing.",
+      "expiration": "This proposal is valid for 30 days from the date of issue."
+    },
+    "footer": {
+      "confidentiality": "This proposal is confidential and prepared exclusively for {{COMPANY_NAME}}.",
+      "contact": "Questions? Reach out to your ScopeForge account team."
+    },
+    "nextSteps": [
+      "Schedule a 30-minute discovery call to review this proposal.",
+      "Confirm access to data sources and designate a product owner.",
+      "Sign the agreement to kick off the discovery sprint."
+    ]
+  }
+}

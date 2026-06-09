@@ -196,7 +196,7 @@ function validateProposalDraftTemplateIds(
 ): boolean {
   return validateArray(input, path, errors, { minLength: 1 }, (item, itemPath) => {
     if (!isProposalDraftTemplateId(item)) {
-      addError(errors, itemPath, `Must be one of: ${PROPOSAL_DRAFT_TEMPLATE_IDS.join(", ")}.`);
+      addError(errors, itemPath, "Must be a non-empty string.");
     }
   });
 }
@@ -307,7 +307,36 @@ function validateProposalDraftValueProposal(
     minExclusive: 0,
   });
 
+  if (input.ramp !== undefined) {
+    validateOptionalArray(input.ramp, `${path}.ramp`, errors, {}, (item, itemPath) => {
+      validateProposalRampYear(item, itemPath, errors);
+    });
+  }
+  if (input.multiYearTotal !== undefined) {
+    validateRange(input.multiYearTotal, `${path}.multiYearTotal`, errors, {
+      label: "Multi-year total",
+      minInclusive: 0,
+    });
+  }
+
   return true;
+}
+
+function validateProposalRampYear(
+  input: unknown,
+  path: string,
+  errors: MutableProposalValidationErrorList,
+): void {
+  if (!isRecord(input)) {
+    addError(errors, path, "Ramp year must be an object.");
+    return;
+  }
+  validateNumber(input.year, `${path}.year`, errors, { integer: true, minInclusive: 1, label: "Year" });
+  validateNumber(input.low, `${path}.low`, errors, { label: "Ramp low" });
+  validateNumber(input.high, `${path}.high`, errors, { label: "Ramp high" });
+  validateOptionalString(input, "label", `${path}.label`, errors);
+  validateNumber(input.cumulativeLow, `${path}.cumulativeLow`, errors, { label: "Cumulative low" });
+  validateNumber(input.cumulativeHigh, `${path}.cumulativeHigh`, errors, { label: "Cumulative high" });
 }
 
 function validateProposalValueSourceRow(
@@ -723,7 +752,7 @@ function hasPricedPhase(input: unknown): boolean {
 }
 
 function isProposalDraftTemplateId(input: unknown): input is ProposalDraftTemplateId {
-  return typeof input === "string" && PROPOSAL_DRAFT_TEMPLATE_IDS.some((id) => id === input);
+  return typeof input === "string" && input.trim().length > 0;
 }
 
 function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
@@ -903,12 +932,23 @@ const costResultSchema = z.object({
   riskAdjustedFloorP90: z.number(),
 });
 
+const rampYearResultSchema = z.object({
+  year: z.number(),
+  low: z.number(),
+  high: z.number(),
+  label: nonEmptyString.optional(),
+  cumulativeLow: z.number(),
+  cumulativeHigh: z.number(),
+});
+
 const valueResultSchema = z.object({
   theoreticalAnnual: z.number(),
   realizedTime: rangeSchema,
   workflows: rangeSchema,
   yearOne: rangeSchema,
   futureUpside: rangeSchema,
+  ramp: z.array(rampYearResultSchema).optional(),
+  multiYearTotal: rangeSchema.optional(),
 });
 
 const pricingResultSchema = z.object({

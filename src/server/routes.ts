@@ -51,6 +51,8 @@ import {
   toProposalProjectId,
   toProposalProjectVersionId,
 } from "../project/state.js";
+import { validateAcceptance } from "../proposal/acceptance.js";
+import { generateAcceptanceSummary } from "../proposal/contract.js";
 import {
   createLocalProposalProjectStore,
   isProposalProjectVersionConflictError,
@@ -66,6 +68,7 @@ import type {
   CreateProposalProjectInput,
   ProposalArtifactRenderMetadata,
   ProposalArtifactMetadata,
+  ProposalAuthorId,
   ProposalAuthorKind,
   ProposalAuthorMetadata,
   ProposalBrandExtractionProvenance,
@@ -94,6 +97,7 @@ import type {
   ProposalBrandColors,
   ProposalDraft,
   ProposalDraftTemplateId,
+  ProposalDraftStatus,
   ProposalIntake,
   ProposalValidationError,
 } from "../proposal/types.js";
@@ -105,6 +109,20 @@ import type { ProposalAgentStreamRunner } from "./agentStream.node.js";
 import { ShareTokenStore, type ShareToken, toShareToken } from "../project/shareStore.js";
 import { EngagementTracker, validateEngagementEvent } from "./trackingStore.js";
 import { buildTrackingScript } from "./trackingScript.js";
+import {
+  submitBatchJob,
+  getJobStatus,
+  cancelBatchJob,
+  validateBatchSubmitInput,
+  parseMultipartBody,
+  buildBatchItemsFromMultipart,
+  loadJobResult,
+} from "./batch.js";
+import {
+  createTemplateStore,
+  type TemplateSearchOptions,
+  type TemplateStore,
+} from "../proposal/templateStore.js";
 
 const API_PREFIX = "/api";
 const DEFAULT_BRAND_ID = "nolan";
@@ -244,6 +262,7 @@ export interface AppRouteDependencies {
   readonly runProposalAgentStream?: ProposalAgentStreamRunner;
   readonly shareStore?: ShareTokenStore;
   readonly engagementTracker?: EngagementTracker;
+  readonly templateStore?: TemplateStore;
 }
 
 interface ResolvedProposalDocument {
@@ -284,7 +303,9 @@ type ProposalProjectRoute =
   | { readonly action: "exportPdf"; readonly projectId: ProposalProjectId }
   | { readonly action: "importBrand"; readonly projectId: ProposalProjectId }
   | { readonly action: "share"; readonly projectId: ProposalProjectId }
-  | { readonly action: "analytics"; readonly projectId: ProposalProjectId };
+  | { readonly action: "analytics"; readonly projectId: ProposalProjectId }
+  | { readonly action: "accept"; readonly projectId: ProposalProjectId }
+  | { readonly action: "acceptance"; readonly projectId: ProposalProjectId };
 
 interface LoadedProposalProject {
   readonly store: ProposalProjectStore;
@@ -381,6 +402,28 @@ export async function handleApiRoute(
       "brand_fetch_not_configured",
       "Website-derived brand extraction is reserved for server-side fetches and is not implemented yet.",
     );
+  }
+
+  // Template routes
+  const templateRoute = parseTemplateRoute(pathname);
+  if (templateRoute !== null) {
+    addBreadcrumb("scopeforge.route.template", {
+      method: request.method,
+      pathname,
+      action: templateRoute.action,
+    });
+    return handleTemplateRoute(templateRoute, request, dependencies);
+  }
+
+  // Batch routes
+  const batchRoute = parseBatchRoute(pathname);
+  if (batchRoute !== null) {
+    addBreadcrumb("scopeforge.route.batch", {
+      method: request.method,
+      pathname,
+      action: batchRoute.action,
+    });
+    return handleBatchRoute(batchRoute, request, dependencies);
   }
 
   return failureResponse(
@@ -486,6 +529,22 @@ async function handleProposalProjectRoute(
       return methodNotAllowedResponse(
         "GET",
         "Project analytics is read-only.",
+      );
+    case "accept":
+      if (request.method === "POST") {
+        return acceptProposalResponse(route.projectId, request.body, dependencies);
+      }
+      return methodNotAllowedResponse(
+        "POST",
+        "Proposal acceptance requires a POST request.",
+      );
+    case "acceptance":
+      if (request.method === "GET") {
+        return getAcceptanceResponse(route.projectId, dependencies);
+      }
+      return methodNotAllowedResponse(
+        "GET",
+        "Proposal acceptance retrieval is read-only.",
       );
   }
 }
@@ -1968,6 +2027,10 @@ function parseProposalProjectRoute(pathname: string): ProposalProjectRoute | nul
       return { action: "share", projectId };
     case "analytics":
       return { action: "analytics", projectId };
+    case "accept":
+      return { action: "accept", projectId };
+    case "acceptance":
+      return { action: "acceptance", projectId };
     default:
       return null;
   }
@@ -3595,4 +3658,823 @@ function createDefaultShareStore(): ShareTokenStore {
 
 function createDefaultEngagementTracker(): EngagementTracker {
   return new EngagementTracker();
+}
+
+// ---------------------------------------------------------------------------
+// Proposal acceptance routes
+// ---------------------------------------------------------------------------
+
+const ACCEPTANCE_DRAFT_STATUSES: readonly ProposalDraftStatus[] = [
+  "draft",
+  "review",
+  "ready",
+  "sent",
+];
+
+interface AcceptProposalInput {
+  readonly clientName: string;
+  readonly clientTitle?: string;
+  readonly clientEmail?: string;
+  readonly signatureType: "typed" | "drawn";
+  readonly signatureData: string;
+  readonly baseVersionId?: ProposalProjectVersionId;
+}
+
+async function acceptProposalResponse(
+  projectId: ProposalProjectId,
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const loaded = await loadProposalProject(projectId, dependencies);
+  if (!loaded.ok) return loaded.response;
+
+  const resolved = resolveAcceptProposalInput(input, loaded.value.project);
+  if (!resolved.ok) return resolved.response;
+
+  const acceptInput = resolved.value;
+  const currentVersion = currentProjectVersionResult(loaded.value.project);
+  if (!currentVersion.ok) return currentVersion.response;
+
+  // Resolve baseVersionId — accept optional, defaults to current
+  const baseVersionId =
+    acceptInput.baseVersionId !== undefined
+      ? acceptInput.baseVersionId
+      : currentVersion.value.versionId;
+
+  // Build acceptance record
+  const acceptanceInput = {
+    projectId,
+    versionId: currentVersion.value.versionId,
+    clientName: acceptInput.clientName,
+    ...(acceptInput.clientTitle === undefined ? {} : { clientTitle: acceptInput.clientTitle }),
+    ...(acceptInput.clientEmail === undefined ? {} : { clientEmail: acceptInput.clientEmail }),
+    signatureType: acceptInput.signatureType,
+    signatureData: acceptInput.signatureData,
+  };
+
+  // Validate with Zod
+  const validation = validateAcceptance(acceptanceInput);
+  if (!validation.ok) {
+    return failureResponse(
+      422,
+      "acceptance_invalid",
+      "Acceptance input is invalid.",
+      validation.errors.map((e) => `${e.path}: ${e.message}`),
+    );
+  }
+
+  const acceptance = validation.value;
+
+  // Update draft status to "accepted"
+  const sourceOfTruth = currentVersion.value.sourceOfTruth;
+  const draft = sourceOfTruth.draft;
+  const currentStatus = draft.metadata.status;
+
+  // Only allow acceptance from draft/ready/sent/review statuses
+  if (currentStatus !== undefined && !isAcceptableDraftStatus(currentStatus)) {
+    return failureResponse(
+      409,
+      "acceptance_not_allowed",
+      `Cannot accept a proposal with status "${currentStatus}". The proposal must be in draft, review, ready, or sent status.`,
+    );
+  }
+
+  const acceptedDraft: typeof draft = {
+    ...draft,
+    metadata: {
+      ...draft.metadata,
+      status: "accepted",
+      updatedAt: acceptance.acceptedAt,
+    },
+  };
+
+  const acceptedSourceOfTruth: ProposalProjectSourceOfTruth = {
+    ...sourceOfTruth,
+    draft: acceptedDraft,
+  };
+
+  try {
+    // Save acceptance record
+    const store = loaded.value.store;
+    await store.saveAcceptance(projectId, acceptance);
+
+    // Commit new version with accepted status
+    const updated = await store.update(projectId, {
+      sourceOfTruth: acceptedSourceOfTruth,
+      createdBy: {
+        authorId: "client-acceptance" as ProposalAuthorId,
+        displayName: acceptInput.clientName,
+        kind: "human",
+        ...(acceptInput.clientEmail === undefined ? {} : { email: acceptInput.clientEmail }),
+      },
+      parentVersionId: baseVersionId,
+      source: "system",
+      label: `Accepted by ${acceptInput.clientName}`,
+      reason: "Client accepted the proposal.",
+    });
+
+    if (updated === null) {
+      return proposalProjectNotFoundResponse(projectId);
+    }
+
+    // Generate and save acceptance summary as artifact
+    const summary = generateAcceptanceSummary(acceptance, acceptedDraft);
+    await store.saveArtifact(projectId, {
+      kind: "attachment",
+      origin: "system",
+      fileName: `acceptance-${acceptance.acceptanceId}.txt`,
+      label: `Acceptance record for ${acceptInput.clientName}`,
+      createdBy: {
+        authorId: "client-acceptance" as ProposalAuthorId,
+        displayName: "System",
+        kind: "system",
+      },
+      content: summary,
+      sourceVersionId: updated.currentVersionId,
+    });
+
+    const currentVersionResult = getCurrentProjectVersion(updated);
+    return jsonResponse(201, {
+      ok: true,
+      acceptance,
+      project: updated,
+      ...(currentVersionResult === null
+        ? {}
+        : { currentVersion: currentVersionResult }),
+    });
+  } catch (error) {
+    if (isProposalProjectVersionConflictError(error)) {
+      return projectVersionConflictResponse({
+        providedBaseVersionId: error.providedBaseVersionId,
+        latestProject: error.latestProject,
+        retryInstruction:
+          "Fetch the latest project state and retry the acceptance against the current version.",
+      });
+    }
+    return projectStoreWriteFailureResponse("acceptance_failed", error);
+  }
+}
+
+async function getAcceptanceResponse(
+  projectId: ProposalProjectId,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const loaded = await loadProposalProject(projectId, dependencies);
+  if (!loaded.ok) return loaded.response;
+
+  const acceptance = await loaded.value.store.getAcceptance(projectId);
+  if (acceptance === null) {
+    return failureResponse(
+      404,
+      "acceptance_not_found",
+      "No acceptance record exists for this proposal.",
+    );
+  }
+
+  return jsonResponse(200, {
+    ok: true,
+    projectId,
+    acceptance,
+  });
+}
+
+function resolveAcceptProposalInput(
+  input: unknown,
+  project: ProposalProject,
+): RouteValueResult<AcceptProposalInput> {
+  if (!isRecord(input)) {
+    return routeFailure(
+      failureResponse(
+        400,
+        "acceptance_request_invalid",
+        "Acceptance request body must be a JSON object.",
+      ),
+    );
+  }
+
+  const clientName = readRequiredRouteString(input, "clientName", "client_name_required", "clientName");
+  if (!clientName.ok) return clientName;
+
+  const signatureType = readRequiredRouteString(input, "signatureType", "signature_type_invalid", "signatureType");
+  if (!signatureType.ok) return signatureType;
+  if (signatureType.value !== "typed" && signatureType.value !== "drawn") {
+    return routeFailure(
+      failureResponse(
+        400,
+        "signature_type_invalid",
+        "signatureType must be either \"typed\" or \"drawn\".",
+      ),
+    );
+  }
+
+  const signatureData = readRequiredRouteString(input, "signatureData", "signature_data_required", "signatureData");
+  if (!signatureData.ok) return signatureData;
+
+  const clientTitle = readOptionalRouteString(input, "clientTitle", "client_title_invalid", "clientTitle");
+  if (!clientTitle.ok) return clientTitle;
+
+  const clientEmail = readOptionalRouteString(input, "clientEmail", "client_email_invalid", "clientEmail");
+  if (!clientEmail.ok) return clientEmail;
+
+  const baseVersionId = resolveOptionalProjectVersionId(input, "baseVersionId");
+  if (!baseVersionId.ok) return baseVersionId;
+
+  return {
+    ok: true,
+    value: {
+      clientName: clientName.value,
+      signatureType: signatureType.value as "typed" | "drawn",
+      signatureData: signatureData.value,
+      ...(clientTitle.value === undefined ? {} : { clientTitle: clientTitle.value }),
+      ...(clientEmail.value === undefined ? {} : { clientEmail: clientEmail.value }),
+      ...(baseVersionId.value === undefined ? {} : { baseVersionId: baseVersionId.value }),
+    },
+  };
+}
+
+function readRequiredRouteString(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+  code: string,
+  label: string,
+): RouteValueResult<string> {
+  const rawValue = readOptionalUnknown(input, key);
+  if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
+    return routeFailure(failureResponse(400, code, `${label} must be a non-empty string.`));
+  }
+  return { ok: true, value: rawValue.trim() };
+}
+
+function isAcceptableDraftStatus(status: ProposalDraftStatus): boolean {
+  return ACCEPTANCE_DRAFT_STATUSES.includes(status);
+}
+
+// ---------------------------------------------------------------------------
+// Template routes
+// ---------------------------------------------------------------------------
+
+type TemplateRouteAction =
+  | { readonly action: "collection" }
+  | { readonly action: "get"; readonly templateId: string }
+  | { readonly action: "delete"; readonly templateId: string }
+  | { readonly action: "use"; readonly templateId: string };
+
+function parseTemplateRoute(pathname: string): TemplateRouteAction | null {
+  if (!pathname.startsWith("/api/templates")) return null;
+  const rest = pathname.slice("/api/templates".length);
+
+  if (rest === "" || rest === "/") {
+    return { action: "collection" };
+  }
+
+  const segments = rest.split("/").filter((segment) => segment.length > 0);
+  if (segments.length === 0) return { action: "collection" };
+
+  const templateId = decodeURIComponent(segments[0] ?? "");
+  if (templateId.trim().length === 0) return null;
+
+  if (segments.length === 1) {
+    return { action: "get", templateId };
+  }
+
+  if (segments.length === 2 && segments[1] === "use") {
+    return { action: "use", templateId };
+  }
+
+  return null;
+}
+
+async function handleTemplateRoute(
+  route: TemplateRouteAction,
+  request: AppRouteRequest,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  switch (route.action) {
+    case "collection":
+      if (request.method === "GET") {
+        return listTemplatesResponse(request.body, dependencies);
+      }
+      if (request.method === "POST") {
+        return saveTemplateResponse(request.body, dependencies);
+      }
+      return methodNotAllowedResponse(
+        "GET, POST",
+        "Template collections support list and create.",
+      );
+    case "get":
+      if (request.method === "GET") {
+        return getTemplateResponse(route.templateId, dependencies);
+      }
+      return methodNotAllowedResponse("GET", "Template retrieval is read-only.");
+    case "delete":
+      if (request.method === "DELETE") {
+        return deleteTemplateResponse(route.templateId, dependencies);
+      }
+      return methodNotAllowedResponse("DELETE", "Template deletion requires DELETE.");
+    case "use":
+      if (request.method === "POST") {
+        return useTemplateResponse(route.templateId, request.body, dependencies);
+      }
+      return methodNotAllowedResponse("POST", "Template use requires a POST request.");
+  }
+}
+
+async function listTemplatesResponse(
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const store = resolveTemplateStore(dependencies);
+  const search = resolveTemplateSearchInput(input);
+  const templates = await store.list(search);
+  return jsonResponse(200, {
+    ok: true,
+    templates,
+    total: templates.length,
+  });
+}
+
+async function getTemplateResponse(
+  templateId: string,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const store = resolveTemplateStore(dependencies);
+  const template = await store.get(templateId);
+  if (template === null) {
+    return failureResponse(
+      404,
+      "template_not_found",
+      `Template not found: ${templateId}.`,
+    );
+  }
+  return jsonResponse(200, {
+    ok: true,
+    template,
+  });
+}
+
+async function saveTemplateResponse(
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  if (!isRecord(input)) {
+    return failureResponse(
+      400,
+      "template_request_invalid",
+      "Save template request body must be a JSON object.",
+    );
+  }
+
+  const name = readOptionalString(input, "name");
+  if (name === undefined || name.length === 0) {
+    return failureResponse(
+      400,
+      "template_name_required",
+      "Template name must be a non-empty string.",
+    );
+  }
+
+  const description = readOptionalString(input, "description") ?? "";
+  const category = readOptionalString(input, "category") ?? "General";
+  const author = readOptionalString(input, "author");
+  const tags = Array.isArray(input.tags)
+    ? input.tags.filter((t): t is string => typeof t === "string")
+    : [];
+
+  if (!isRecord(input.draft)) {
+    return failureResponse(
+      400,
+      "template_draft_required",
+      "Save template requires a draft object.",
+    );
+  }
+
+  const validation = validateProposalDraft(input.draft);
+  if (!validation.ok) {
+    return validationFailureResponse("Template draft is invalid.", validation.errors);
+  }
+
+  const store = resolveTemplateStore(dependencies);
+  const template = await store.save({
+    name,
+    description,
+    category,
+    tags,
+    draft: validation.value,
+    ...(author === undefined ? {} : { author }),
+  });
+
+  return jsonResponse(201, {
+    ok: true,
+    template,
+  });
+}
+
+async function deleteTemplateResponse(
+  templateId: string,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const store = resolveTemplateStore(dependencies);
+  const deleted = await store.delete(templateId);
+  if (!deleted) {
+    return failureResponse(
+      404,
+      "template_not_found_or_builtin",
+      `Cannot delete template: ${templateId}. Template not found or is a built-in template.`,
+    );
+  }
+  return jsonResponse(200, {
+    ok: true,
+    deleted: true,
+  });
+}
+
+async function useTemplateResponse(
+  templateId: string,
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const store = resolveTemplateStore(dependencies);
+  const template = await store.get(templateId);
+  if (template === null) {
+    return failureResponse(
+      404,
+      "template_not_found",
+      `Template not found: ${templateId}.`,
+    );
+  }
+
+  // Create a new proposal project from the template draft.
+  const projectStore = dependencies.proposalProjectStore ?? createLocalProposalProjectStore();
+  if (projectStore.load !== undefined) {
+    const loadResult = await projectStore.load();
+    if (!loadResult.ok) {
+      return failureResponse(
+        503,
+        "project_store_load_failed",
+        "Proposal project storage could not be loaded.",
+      );
+    }
+  }
+
+  const now = new Date().toISOString();
+  const title =
+    isRecord(input) && typeof input.title === "string" && input.title.trim().length > 0
+      ? input.title.trim()
+      : template.name;
+  const createdBy = resolveProposalProjectAuthor(isRecord(input) ? input : {});
+  if (!createdBy.ok) return createdBy.response;
+
+  try {
+    const project = await projectStore.create({
+      sourceOfTruth: {
+        draft: template.draft,
+        vendorBrand: createDefaultVendorBrand(),
+        clientBrand: deriveClientBrand(template.draft.preparedFor),
+      },
+      createdBy: createdBy.value,
+      title,
+      createdAt: now,
+      source: "import",
+      label: `Created from template: ${template.name}`,
+    });
+
+    const currentVersion = getCurrentProjectVersion(project);
+    return jsonResponse(201, {
+      ok: true,
+      project,
+      templateId,
+      ...(currentVersion === null
+        ? {}
+        : { currentVersion, sourceOfTruth: currentVersion.sourceOfTruth }),
+    });
+  } catch (error) {
+    return projectStoreWriteFailureResponse("template_use_failed", error);
+  }
+}
+
+function resolveTemplateStore(dependencies: AppRouteDependencies): TemplateStore {
+  return dependencies.templateStore ?? createTemplateStore();
+}
+
+function resolveTemplateSearchInput(input: unknown): TemplateSearchOptions | undefined {
+  if (!isRecord(input)) return undefined;
+  const category = readOptionalString(input, "category");
+  const query = readOptionalString(input, "query");
+  const tags = Array.isArray(input.tags)
+    ? input.tags.filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+    : undefined;
+
+  if (category === undefined && query === undefined && (tags === undefined || tags.length === 0)) {
+    return undefined;
+  }
+
+  return {
+    ...(category === undefined ? {} : { category }),
+    ...(query === undefined ? {} : { query }),
+    ...(tags === undefined || tags.length === 0 ? {} : { tags }),
+  };
+}
+
+function createDefaultVendorBrand(): ProposalBrand {
+  return {
+    id: "default",
+    name: "ScopeForge",
+    logoText: "SF",
+    colors: {
+      primary: "#1e293b",
+      secondary: "#334155",
+      accent: "#2563eb",
+      background: "#ffffff",
+      surface: "#f8fafc",
+      text: "#1e293b",
+      mutedText: "#64748b",
+      border: "#e2e8f0",
+    },
+  } satisfies ProposalBrand;
+}
+
+// ---------------------------------------------------------------------------
+// Batch routes
+// ---------------------------------------------------------------------------
+
+type BatchRouteAction =
+  | { readonly action: "submit" }
+  | { readonly action: "submitMultipart" }
+  | { readonly action: "status"; readonly jobId: string }
+  | { readonly action: "results"; readonly jobId: string }
+  | { readonly action: "cancel"; readonly jobId: string };
+
+function parseBatchRoute(pathname: string): BatchRouteAction | null {
+  if (!pathname.startsWith("/api/batch")) return null;
+  const rest = pathname.slice("/api/batch".length);
+
+  if (rest === "/submit" || rest === "") {
+    return { action: "submit" };
+  }
+
+  if (rest === "/submit-multipart") {
+    return { action: "submitMultipart" };
+  }
+
+  const segments = rest
+    .split("/")
+    .filter((segment) => segment.length > 0);
+
+  if (segments.length === 0) return { action: "submit" };
+
+  // /api/batch/:jobId or /api/batch/:jobId/results
+  const jobId = segments[0];
+  if (jobId === undefined || jobId.trim().length === 0) return null;
+
+  if (segments.length === 1) {
+    return { action: "status", jobId };
+  }
+
+  if (segments.length === 2 && segments[1] === "results") {
+    return { action: "results", jobId };
+  }
+
+  return null;
+}
+
+async function handleBatchRoute(
+  route: BatchRouteAction,
+  request: AppRouteRequest,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  switch (route.action) {
+    case "submit":
+      if (request.method === "POST") {
+        return batchSubmitResponse(request.body, dependencies);
+      }
+      return methodNotAllowedResponse("POST", "Batch submit requires a POST request.");
+    case "submitMultipart":
+      if (request.method === "POST") {
+        return batchMultipartSubmitResponse(request, dependencies);
+      }
+      return methodNotAllowedResponse("POST", "Batch multipart submit requires a POST request.");
+    case "status":
+      if (request.method === "GET") {
+        return batchJobStatusResponse(route.jobId);
+      }
+      if (request.method === "DELETE") {
+        return batchCancelResponse(route.jobId);
+      }
+      return methodNotAllowedResponse(
+        "GET, DELETE",
+        "Batch job status supports GET and DELETE (cancel).",
+      );
+    case "results":
+      if (request.method === "GET") {
+        return batchJobResultsResponse(route.jobId);
+      }
+      return methodNotAllowedResponse(
+        "GET",
+        "Batch job results are read-only.",
+      );
+    case "cancel":
+      if (request.method === "DELETE") {
+        return batchCancelResponse(route.jobId);
+      }
+      return methodNotAllowedResponse("DELETE", "Batch cancellation requires DELETE.");
+  }
+}
+
+async function batchSubmitResponse(
+  input: unknown,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  const validation = validateBatchSubmitInput(input);
+  if (!validation.ok) {
+    return failureResponse(validation.status, validation.code, validation.message, validation.details);
+  }
+
+  const agentConfig =
+    dependencies.envAgentConfig?.enabled === true
+      ? dependencies.envAgentConfig
+      : undefined;
+
+  const result = submitBatchJob(validation.value.items, {
+    agentConfig,
+    projectStore: dependencies.proposalProjectStore,
+  });
+
+  return jsonResponse(201, {
+    ok: true,
+    jobId: result.jobId,
+    itemCount: result.itemCount,
+  });
+}
+
+async function batchMultipartSubmitResponse(
+  request: AppRouteRequest,
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
+  // For multipart, the body must be available. In the current server,
+  // the JSON body reader already consumed it. We need raw access.
+  // This route expects the raw body to be passed via a special path.
+  // For now, we accept the multipart data as a JSON-encoded body
+  // containing { contentType, base64Body }.
+  const body = request.body as Record<string, unknown> | undefined;
+  if (body === undefined || typeof body !== "object") {
+    return failureResponse(
+      400,
+      "batch_multipart_invalid",
+      "Multipart submit requires a JSON body with contentType and base64Body fields.",
+    );
+  }
+
+  const contentType = typeof body.contentType === "string" ? body.contentType : undefined;
+  const base64Body = typeof body.base64Body === "string" ? body.base64Body : undefined;
+
+  if (contentType === undefined || base64Body === undefined) {
+    return failureResponse(
+      400,
+      "batch_multipart_invalid",
+      "Multipart submit requires contentType and base64Body fields.",
+    );
+  }
+
+  const rawBuffer = Buffer.from(base64Body, "base64");
+  let parts;
+  try {
+    parts = await parseMultipartBody(contentType, rawBuffer);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return failureResponse(
+      400,
+      "batch_multipart_parse_failed",
+      `Failed to parse multipart body: ${message}`,
+    );
+  }
+
+  const parsed = buildBatchItemsFromMultipart(parts);
+  if (!parsed.ok) {
+    return failureResponse(parsed.status, parsed.code, parsed.message, parsed.details);
+  }
+
+  const agentConfig =
+    dependencies.envAgentConfig?.enabled === true
+      ? dependencies.envAgentConfig
+      : undefined;
+
+  const result = submitBatchJob(parsed.value.items, {
+    agentConfig,
+    projectStore: dependencies.proposalProjectStore,
+  });
+
+  return jsonResponse(201, {
+    ok: true,
+    jobId: result.jobId,
+    itemCount: result.itemCount,
+  });
+}
+
+function batchJobStatusResponse(jobId: string): ApiRouteResponse {
+  const job = getJobStatus(jobId);
+  if (job === undefined) {
+    // Check persisted results.
+    return failureResponse(
+      404,
+      "batch_job_not_found",
+      `Batch job not found: ${jobId}.`,
+    );
+  }
+
+  const completed = job.items.filter((i) => i.status === "completed").length;
+  const failed = job.items.filter((i) => i.status === "failed").length;
+  const processing = job.items.filter((i) => i.status === "processing").length;
+  const pending = job.items.filter((i) => i.status === "pending").length;
+
+  return jsonResponse(200, {
+    ok: true,
+    jobId: job.jobId,
+    status: job.status,
+    createdAt: job.createdAt,
+    ...(job.completedAt === undefined ? {} : { completedAt: job.completedAt }),
+    ...(job.totalTokens === undefined ? {} : { totalTokens: job.totalTokens }),
+    ...(job.estimatedCostSaving === undefined
+      ? {}
+      : { estimatedCostSaving: job.estimatedCostSaving }),
+    summary: {
+      total: job.items.length,
+      completed,
+      failed,
+      processing,
+      pending,
+    },
+    items: job.items.map((item) => ({
+      itemId: item.itemId,
+      inputFileName: item.inputFileName,
+      status: item.status,
+      ...(item.projectId === undefined ? {} : { projectId: item.projectId }),
+      ...(item.error === undefined ? {} : { error: item.error }),
+    })),
+  });
+}
+
+async function batchJobResultsResponse(jobId: string): Promise<ApiRouteResponse> {
+  // Check in-memory first, then persisted results.
+  let job = getJobStatus(jobId);
+  if (job === undefined) {
+    job = await loadJobResult(jobId);
+  }
+
+  if (job === undefined) {
+    return failureResponse(
+      404,
+      "batch_job_not_found",
+      `Batch job not found: ${jobId}.`,
+    );
+  }
+
+  const completed = job.items.filter((i) => i.status === "completed").length;
+  const failed = job.items.filter((i) => i.status === "failed").length;
+
+  return jsonResponse(200, {
+    ok: true,
+    jobId: job.jobId,
+    status: job.status,
+    completed,
+    failed,
+    total: job.items.length,
+    createdAt: job.createdAt,
+    ...(job.completedAt === undefined ? {} : { completedAt: job.completedAt }),
+    ...(job.totalTokens === undefined ? {} : { totalTokens: job.totalTokens }),
+    ...(job.estimatedCostSaving === undefined
+      ? {}
+      : { estimatedCostSaving: job.estimatedCostSaving }),
+    results: job.items.map((item) => ({
+      itemId: item.itemId,
+      inputFileName: item.inputFileName,
+      status: item.status,
+      ...(item.projectId === undefined ? {} : { projectId: item.projectId }),
+      ...(item.error === undefined ? {} : { error: item.error }),
+    })),
+  });
+}
+
+function batchCancelResponse(jobId: string): ApiRouteResponse {
+  const cancelled = cancelBatchJob(jobId);
+  if (!cancelled) {
+    const job = getJobStatus(jobId);
+    if (job === undefined) {
+      return failureResponse(
+        404,
+        "batch_job_not_found",
+        `Batch job not found: ${jobId}.`,
+      );
+    }
+    return failureResponse(
+      409,
+      "batch_job_not_cancellable",
+      `Batch job cannot be cancelled in status: ${job.status}.`,
+    );
+  }
+
+  return jsonResponse(200, {
+    ok: true,
+    jobId,
+    status: "cancelled",
+  });
 }

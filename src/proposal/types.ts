@@ -47,7 +47,7 @@ export interface ProposalIntake {
   readonly nextSteps: readonly string[];
 }
 
-export type ProposalDraftTemplateId = "generic/value-proposal" | "generic/scope-review";
+export type ProposalDraftTemplateId = string;
 
 export type ProposalDraftStatus = "draft" | "review" | "ready" | "sent" | "accepted" | "archived";
 
@@ -80,6 +80,19 @@ export interface ProposalDraftValueProposal {
   readonly valueSources: readonly ProposalValueSourceRow[];
   readonly sixMonthSavings: Range;
   readonly annualValueTarget: number;
+  /** Multi-year savings ramp for the value-renderer chart. Sourced from the project's ValueModel.ramp. */
+  readonly ramp?: readonly ProposalRampYear[];
+  /** Total value across all ramp years. Computed when ramp is present. */
+  readonly multiYearTotal?: Range;
+}
+
+export interface ProposalRampYear {
+  readonly year: number;
+  readonly low: number;
+  readonly high: number;
+  readonly label?: string;
+  readonly cumulativeLow: number;
+  readonly cumulativeHigh: number;
 }
 
 export interface ProposalBuildPlanStep {
@@ -129,6 +142,21 @@ export interface ProposalFooter {
   readonly confidentiality: string;
   readonly contact?: string;
   readonly legal?: string;
+}
+
+export interface ProposalTemplate {
+  readonly templateId: string;
+  readonly name: string;
+  readonly description: string;
+  readonly category: string;
+  readonly builtIn: boolean;
+  readonly createdAt?: string;
+  readonly author?: string;
+  readonly tags: readonly string[];
+}
+
+export interface ProposalTemplateWithDraft extends ProposalTemplate {
+  readonly draft: ProposalDraft;
 }
 
 export interface ProposalDraft {

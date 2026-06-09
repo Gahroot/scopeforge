@@ -1,0 +1,221 @@
+{
+  "templateId": "built-in/mobile-app",
+  "name": "Mobile App Development",
+  "description": "Proposal template for native or cross-platform mobile application development. Covers UX design, development, testing, and App Store deployment.",
+  "category": "Mobile",
+  "builtIn": true,
+  "author": "ScopeForge",
+  "tags": ["mobile", "ios", "android", "cross-platform", "react-native", "flutter"],
+  "draft": {
+    "project": {
+      "project": "{{PROJECT_NAME}}",
+      "client": {
+        "sizeHeadcount": 80,
+        "buyerRole": "VP Product",
+        "workingWeeks": 46
+      },
+      "cost": {
+        "blendedRate": { "optimistic": 125, "likely": 165, "pessimistic": 210 },
+        "margin": 0.4,
+        "workstreams": [
+          {
+            "name": "Product discovery & UX design",
+            "hours": { "optimistic": 24, "likely": 40, "pessimistic": 60 },
+            "aiFactor": 1,
+            "judgment": true
+          },
+          {
+            "name": "Mobile app development (cross-platform)",
+            "hours": { "optimistic": 80, "likely": 120, "pessimistic": 170 },
+            "aiFactor": 0.5,
+            "judgment": false
+          },
+          {
+            "name": "Backend API & integration",
+            "hours": { "optimistic": 40, "likely": 60, "pessimistic": 90 },
+            "aiFactor": 0.55,
+            "judgment": false
+          },
+          {
+            "name": "QA, device testing & App Store submission",
+            "hours": { "optimistic": 20, "likely": 32, "pessimistic": 50 },
+            "aiFactor": 1,
+            "judgment": true
+          }
+        ]
+      },
+      "value": {
+        "realizationFactor": { "low": 0.4, "high": 0.55 },
+        "segments": [
+          { "role": "Product team", "headcount": 3, "hoursPerWeek": 4, "loadedRate": 90 },
+          { "role": "Customer success", "headcount": 2, "hoursPerWeek": 3, "loadedRate": 65 }
+        ],
+        "workflows": [
+          { "name": "Mobile customer engagement", "low": 20000, "high": 50000 },
+          { "name": "In-app self-service", "low": 10000, "high": 25000 }
+        ],
+        "futureUpside": [
+          { "name": "Push notification revenue channel", "low": 30000, "high": 80000 }
+        ]
+      },
+      "pricing": {
+        "valueFraction": { "low": 0.1, "high": 0.2 },
+        "tiers": [
+          { "name": "Discovery & Prototype", "price": 20000 },
+          { "name": "MVP Launch (iOS + Android)", "price": 120000 },
+          { "name": "Full-Featured Release", "price": 200000 }
+        ]
+      }
+    },
+    "templateIds": ["built-in/mobile-app"],
+    "metadata": {
+      "draftId": "tpl-mobile-app",
+      "version": 1,
+      "status": "draft",
+      "source": "template-gallery"
+    },
+    "preparedFor": {
+      "companyName": "{{COMPANY_NAME}}"
+    },
+    "details": {
+      "title": "Mobile App Development Proposal",
+      "subtitle": "Cross-platform mobile experience — from design to App Store launch",
+      "recommendation": "Begin with a focused MVP targeting your core mobile use case, then iterate based on user feedback.",
+      "executiveSummary": [
+        "A well-crafted mobile app can significantly increase customer engagement and retention.",
+        "We recommend a cross-platform approach (React Native or Flutter) to maximize reach while controlling cost.",
+        "The MVP focuses on your highest-value mobile use case, enabling fast launch and validated learning."
+      ],
+      "whatWeHeard": [
+        "Your customers increasingly expect a mobile-first experience.",
+        "The current web experience doesn't translate well to mobile devices.",
+        "Speed to market is important — you need to validate demand before investing in platform-wide features."
+      ],
+      "investmentSummary": "Total investment ranges from $120K for an MVP launch to $200K for a full-featured release, with milestone-based payments tied to deliverables."
+    },
+    "valueProposal": {
+      "headline": "Meet your customers where they are — on mobile",
+      "narrative": "A purpose-built mobile app increases engagement, enables self-service, and opens new revenue channels that aren't possible on web alone.",
+      "unlocks": [
+        "Higher customer engagement — mobile users interact 3x more than web users",
+        "Self-service capability — let customers manage their experience from anywhere",
+        "Push notification channel — re-engage users with timely, relevant updates"
+      ],
+      "valueSources": [
+        {
+          "label": "Mobile customer engagement lift",
+          "source": "Product team",
+          "currentState": "Web-only experience with limited mobile responsiveness",
+          "futureState": "Native mobile experience with optimized workflows",
+          "annualValue": { "low": 25000, "high": 60000 },
+          "confidence": "medium"
+        },
+        {
+          "label": "Customer self-service via mobile",
+          "source": "Customer success",
+          "currentState": "Customers contact support for routine tasks",
+          "futureState": "In-app self-service for account management and support",
+          "annualValue": { "low": 15000, "high": 35000 },
+          "confidence": "medium"
+        }
+      ],
+      "sixMonthSavings": { "low": 15000, "high": 35000 },
+      "annualValueTarget": 55000
+    },
+    "buildPlan": [
+      {
+        "name": "Product discovery & UX",
+        "timing": "Weeks 1–3",
+        "description": "Define user journeys, create wireframes, and establish the design system for the mobile app.",
+        "activities": ["User research", "Wireframing & prototyping", "Design system creation"],
+        "outcomes": ["User journey maps", "Interactive prototype", "Design system"]
+      },
+      {
+        "name": "MVP development",
+        "timing": "Weeks 4–10",
+        "description": "Build the core mobile experience with key features for launch.",
+        "activities": ["Cross-platform development", "Backend API integration", "Offline support"],
+        "outcomes": ["Working mobile app", "Backend API", "Test build on devices"]
+      },
+      {
+        "name": "QA & App Store submission",
+        "timing": "Weeks 11–13",
+        "description": "Comprehensive testing across devices, performance optimization, and App Store submission.",
+        "activities": ["Device testing", "Performance optimization", "App Store preparation"],
+        "outcomes": ["QA report", "App Store listing", "Published app"]
+      },
+      {
+        "name": "Post-launch support & iteration",
+        "timing": "Weeks 14–16",
+        "description": "Monitor launch metrics, fix issues, and plan the next iteration based on user feedback.",
+        "activities": ["Analytics setup", "Bug fixes", "Iteration planning"],
+        "outcomes": ["Analytics dashboard", "Stabilized release", "Iteration roadmap"]
+      }
+    ],
+    "actualDeliverables": [
+      {
+        "title": "Mobile app (iOS + Android)",
+        "description": "Cross-platform mobile application with native look and feel on both platforms.",
+        "included": ["React Native / Flutter source code", "iOS build", "Android build"],
+        "acceptanceCriteria": ["Runs on iOS 15+ and Android 12+", "Meets App Store guidelines"]
+      },
+      {
+        "title": "Backend API",
+        "description": "RESTful or GraphQL API powering the mobile app.",
+        "included": ["API code", "Database schema", "API documentation"],
+        "acceptanceCriteria": ["All endpoints documented", "Load test passes for expected traffic"]
+      },
+      {
+        "title": "Design system & assets",
+        "description": "Complete design system with components, icons, and guidelines.",
+        "included": ["Component library", "Icon set", "Style guide"],
+        "acceptanceCriteria": ["Design system covers all app screens"]
+      },
+      {
+        "title": "App Store listing",
+        "description": "Prepare and submit the app to both Apple App Store and Google Play.",
+        "included": ["Store descriptions", "Screenshots", "Submission support"],
+        "acceptanceCriteria": ["App approved on both stores"]
+      }
+    ],
+    "pricing": {
+      "summary": "Milestone-based pricing tied to deliverables. MVP at $120K; full release at $200K.",
+      "phases": [
+        { "name": "Discovery & Prototype", "price": 20000 },
+        { "name": "MVP Launch (iOS + Android)", "price": 120000 },
+        { "name": "Full-Featured Release", "price": 200000 }
+      ]
+    },
+    "terms": {
+      "paymentTerms": "30% upon signing, 30% at MVP milestone, 20% at QA completion, 20% at App Store launch.",
+      "startConditions": ["Product requirements document or equivalent", "Design system or brand guidelines if available"],
+      "assumptions": [
+        "Cross-platform framework (React Native or Flutter) is suitable for the target use case.",
+        "Client provides App Store and Google Play developer accounts.",
+        "Third-party API integrations are available and documented."
+      ],
+      "exclusions": [
+        "App Store developer account fees.",
+        "Third-party service subscription costs.",
+        "Ongoing hosting, CI/CD, or infrastructure costs beyond initial setup.",
+        "Wearable (Apple Watch, Wear OS) or tablet-specific layouts."
+      ],
+      "clientResponsibilities": [
+        "Provide product requirements and acceptance criteria.",
+        "Review designs and builds at each milestone.",
+        "Provide App Store developer accounts and certificates."
+      ],
+      "changeControl": "Feature changes after the discovery phase are handled via written change orders with updated estimates.",
+      "expiration": "This proposal is valid for 30 days from the date of issue."
+    },
+    "footer": {
+      "confidentiality": "This proposal is confidential and prepared exclusively for {{COMPANY_NAME}}.",
+      "contact": "Questions? Reach out to your ScopeForge account team."
+    },
+    "nextSteps": [
+      "Schedule a scoping call to align on MVP features.",
+      "Share any existing design assets or brand guidelines.",
+      "Confirm App Store developer account access."
+    ]
+  }
+}
