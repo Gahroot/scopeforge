@@ -1,11 +1,14 @@
-import { Building2, FileText, ListChecks } from "lucide-react";
+import { useState } from "react";
+import { Building2, ChevronDown, ChevronRight, FileText, ListChecks } from "lucide-react";
 import { Badge } from "../components/ui/badge.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
 import { ScrollArea } from "../components/ui/scroll-area.js";
 import { PriceCard } from "./PriceCard.js";
+import { SensitivityPanel } from "./SensitivityPanel.js";
 import { GuardrailList } from "./GuardrailList.js";
 import { PreviewExportBar } from "./PreviewExportBar.js";
 import { StylePresetSelector } from "./StylePresetSelector.js";
+import { ProposalAnalytics } from "../projects/ProposalAnalytics.js";
 import type { ProjectConflictNotice } from "../lib/collaboration.js";
 import type { SessionSnapshot } from "../lib/types.js";
 import type { ProposalProject } from "../../project/types.js";
@@ -49,6 +52,8 @@ export function DraftPanel({
   onProjectUpdated,
   onProjectActivitySaved,
 }: DraftPanelProps): JSX.Element {
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
+
   if (snapshot === null) {
     return (
       <aside className="hidden min-h-0 flex-col bg-muted/30 lg:flex">
@@ -63,6 +68,7 @@ export function DraftPanel({
 
   const { draft, economics, validation } = snapshot;
   const brand = vendorBrand ?? brands.find((candidate) => candidate.id === draft.brandId);
+  const hasProjectId = snapshot.projectId !== undefined;
 
   return (
     <aside className="hidden min-h-0 flex-col bg-muted/30 lg:flex">
@@ -104,6 +110,7 @@ export function DraftPanel({
           )}
 
           <PriceCard economics={economics} />
+          <SensitivityPanel snapshot={snapshot} />
 
           <Card>
             <CardHeader>
@@ -154,6 +161,28 @@ export function DraftPanel({
             onProjectUpdated={onProjectUpdated}
             onProjectActivitySaved={onProjectActivitySaved}
           />
+
+          {hasProjectId && (
+            <Card>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between p-4 text-left"
+                onClick={() => setAnalyticsOpen((prev) => !prev)}
+              >
+                <CardTitle className="text-sm">Engagement analytics</CardTitle>
+                {analyticsOpen ? (
+                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                )}
+              </button>
+              {analyticsOpen && (
+                <CardContent>
+                  <ProposalAnalytics projectId={snapshot.projectId ?? ""} />
+                </CardContent>
+              )}
+            </Card>
+          )}
         </div>
       </ScrollArea>
     </aside>

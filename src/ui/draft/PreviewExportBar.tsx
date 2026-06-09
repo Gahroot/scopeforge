@@ -10,6 +10,7 @@ import {
   type ProjectProposalRequestBody,
   type ProposalRequestBody,
 } from "../lib/api.js";
+import { ShareProposalButton } from "./ShareProposalButton.js";
 import { apiErrorToProjectConflict, type ProjectConflictNotice } from "../lib/collaboration.js";
 import type { SessionSnapshot } from "../lib/types.js";
 import type { ProposalProject } from "../../project/types.js";
@@ -129,6 +130,10 @@ export function PreviewExportBar({
           )}
           Export PDF
         </Button>
+        <ShareProposalButton
+          projectId={snapshot.projectId}
+          disabled={disabled || blocked || action !== null}
+        />
       </div>
       {blocked && (
         <p className="text-xs text-muted-foreground">

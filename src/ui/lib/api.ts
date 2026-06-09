@@ -11,6 +11,7 @@ import type {
   SourceMaterialKind,
 } from "../../ingest/types.js";
 import type { ProposalAudience, ProposalBrand, ProposalDraft } from "../../proposal/types.js";
+import type { Project, SensitivityInput, SensitivityResult } from "../../core/types.js";
 import { addClientBreadcrumb, logClientError } from "./diagnostics.js";
 
 export interface HealthAgentSummary {
@@ -350,6 +351,23 @@ export async function ingestSourceMaterial(
   return postJson<SourceMaterialIngestResponse>("/api/source-material/ingest", body, signal);
 }
 
+export interface SensitivityRequestBody {
+  readonly project: Project;
+  readonly sensitivity: SensitivityInput;
+}
+
+export interface SensitivityResponse {
+  readonly ok: boolean;
+  readonly result: SensitivityResult;
+}
+
+export async function fetchSensitivity(
+  body: SensitivityRequestBody,
+  signal?: AbortSignal,
+): Promise<ApiResult<SensitivityResponse>> {
+  return postJson<SensitivityResponse>("/api/sensitivity", body, signal);
+}
+
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<ApiResult<T>> {
   addClientBreadcrumb("scopeforge.client.request_start", { method: "GET", path });
   try {
@@ -416,6 +434,41 @@ function networkFailure<T>(error: unknown): ApiResult<T> {
       message: error instanceof Error ? error.message : String(error),
     },
   };
+}
+
+export interface ShareProposalResponse {
+  readonly ok: boolean;
+  readonly url: string;
+  readonly token: string;
+}
+
+export interface AnalyticsData {
+  readonly views: number;
+  readonly uniqueViewers: number;
+  readonly sectionEngagement: Readonly<Record<string, number>>;
+  readonly pricingFocusCount: number;
+  readonly lastViewed: string | null;
+}
+
+export async function shareProposal(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<ShareProposalResponse>> {
+  return postJson<ShareProposalResponse>(
+    `/api/projects/${encodeURIComponent(projectId)}/share`,
+    {},
+    signal,
+  );
+}
+
+export async function fetchProposalAnalytics(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<AnalyticsData>> {
+  return getJson<AnalyticsData>(
+    `/api/projects/${encodeURIComponent(projectId)}/analytics`,
+    signal,
+  );
 }
 
 export interface PreviewResponse {
