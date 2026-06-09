@@ -187,6 +187,8 @@ export interface StreamProposalAgentFramesOptions {
   readonly abort: AbortController;
   /** Optional finalizer that runs after tools finish, before the terminal snapshot is emitted. */
   readonly beforeSnapshot?: () => Promise<void> | void;
+  /** Thinking level from the agent config, attached to emitted ThinkingFrames. */
+  readonly thinkingLevel?: string;
 }
 
 /**
@@ -198,11 +200,12 @@ export interface StreamProposalAgentFramesOptions {
 export async function* streamProposalAgentFrames(
   options: StreamProposalAgentFramesOptions,
 ): AsyncGenerator<AgentStreamFrame> {
-  const { stream, session, limits, abort, beforeSnapshot } = options;
+  const { stream, session, limits, abort, beforeSnapshot, thinkingLevel } = options;
   const toolNames = new Map<string, string>();
   let toolCalls = 0;
   let toolLimitHit = false;
   let snapshotPrepared = false;
+  let thinkingBuffer = "";
 
   async function snapshotFrame(): Promise<Extract<AgentStreamFrame, { type: "snapshot" }>> {
     if (!snapshotPrepared && beforeSnapshot !== undefined) {
@@ -236,16 +239,49 @@ export async function* streamProposalAgentFrames(
         addBreadcrumb("scopeforge.agent.event_error", { sessionId: session.id });
         logError("scopeforge.agent.event_error", event.error, { sessionId: session.id });
       }
+
+      // Accumulate thinking deltas and emit a completed ThinkingFrame when
+      // the model transitions away from thinking (text, tool, or end of stream).
+      if (event.type === "thinking_delta") {
+        thinkingBuffer += event.text;
+      } else if (thinkingBuffer.length > 0) {
+        yield {
+          type: "thinking",
+          content: thinkingBuffer,
+          ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+        };
+        thinkingBuffer = "";
+      }
+
       for (const frame of eventToFrames(event, toolNames)) yield frame;
     }
 
     if (toolLimitHit) {
+      // Flush any in-progress thinking before emitting the limit error.
+      if (thinkingBuffer.length > 0) {
+        yield {
+          type: "thinking",
+          content: thinkingBuffer,
+          ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+        };
+        thinkingBuffer = "";
+      }
       // The aborted prompt rejects its result promise separately from the
       // iterator; observe it so it cannot surface as an unhandled rejection.
       await Promise.resolve(stream).catch(() => undefined);
       yield await snapshotFrame();
       yield toolLimitFrame(limits.maxToolCalls);
       return;
+    }
+
+    // Flush any remaining thinking content after the stream ends.
+    if (thinkingBuffer.length > 0) {
+      yield {
+        type: "thinking",
+        content: thinkingBuffer,
+        ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+      };
+      thinkingBuffer = "";
     }
 
     const result = await stream;
@@ -357,6 +393,7 @@ export async function* runProposalAgentStream(
       limits,
       abort,
       ...(options.beforeSnapshot === undefined ? {} : { beforeSnapshot: options.beforeSnapshot }),
+      ...(options.config.thinking === undefined ? {} : { thinkingLevel: options.config.thinking }),
     })) {
       if (frame.type === "done") totalTurns = frame.totalTurns;
       if (frame.type === "error") terminalCode = frame.code;

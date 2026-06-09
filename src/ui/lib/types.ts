@@ -81,6 +81,11 @@ export type AgentStreamFrame =
   | { readonly type: "text_delta"; readonly text: string }
   | { readonly type: "thinking_delta"; readonly text: string }
   | {
+      readonly type: "thinking";
+      readonly content: string;
+      readonly thinkingLevel?: string;
+    }
+  | {
       readonly type: "tool_start";
       readonly toolCallId: string;
       readonly name: string;

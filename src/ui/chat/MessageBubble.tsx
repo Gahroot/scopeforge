@@ -1,6 +1,7 @@
 import { AlertCircle } from "lucide-react";
 import type { ChatMessage } from "./useAgentStream.js";
 import { MarkdownContent } from "./MarkdownContent.js";
+import { ThinkingBlock } from "./ThinkingBlock.js";
 import { ToolActivity } from "./ToolActivity.js";
 import { cn } from "../lib/utils.js";
 
@@ -13,6 +14,14 @@ export function MessageBubble({ message }: MessageBubbleProps): JSX.Element {
   return (
     <div className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}>
       <div className={cn("flex max-w-[85%] flex-col gap-2", isUser ? "items-end" : "items-start")}>
+        {!isUser && message.thinkingBlocks.length > 0 &&
+          message.thinkingBlocks.map((block, index) => (
+            <ThinkingBlock
+              key={index}
+              content={block.content}
+              thinkingLevel={block.thinkingLevel}
+            />
+          ))}
         {!isUser && message.tools.length > 0 && <ToolActivity tools={message.tools} />}
         {(message.text.length > 0 || message.streaming === true) && (
           <div

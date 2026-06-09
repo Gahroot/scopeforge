@@ -13,11 +13,17 @@ export interface ToolActivityItem {
   isError: boolean;
 }
 
+export interface ThinkingBlock {
+  readonly content: string;
+  readonly thinkingLevel?: string;
+}
+
 export interface ChatMessage {
   readonly id: string;
   readonly role: "user" | "assistant";
   text: string;
   thinking?: string;
+  thinkingBlocks: ThinkingBlock[];
   tools: ToolActivityItem[];
   streaming?: boolean;
   error?: string;
@@ -89,7 +95,7 @@ export function useAgentStream(): AgentStreamApi {
     setMessages((prev) =>
       prev.map((message) => {
         if (message.id !== id) return message;
-        const next = { ...message, tools: [...message.tools] };
+        const next = { ...message, tools: [...message.tools], thinkingBlocks: [...message.thinkingBlocks] };
         update(next);
         return next;
       }),
@@ -104,8 +110,8 @@ export function useAgentStream(): AgentStreamApi {
       const assistantId = makeId();
       setMessages((prev) => [
         ...prev,
-        { id: makeId(), role: "user", text, tools: [] },
-        { id: assistantId, role: "assistant", text: "", tools: [], streaming: true },
+        { id: makeId(), role: "user", text, thinkingBlocks: [], tools: [] },
+        { id: assistantId, role: "assistant", text: "", thinkingBlocks: [], tools: [], streaming: true },
       ]);
       setStatus("thinking");
 
@@ -251,6 +257,14 @@ function applyFrame(frame: AgentStreamFrame, assistantId: string, ctx: ApplyCont
       ctx.setStatus("thinking");
       ctx.patchAssistant(assistantId, (m) => {
         m.thinking = (m.thinking ?? "") + frame.text;
+      });
+      break;
+    case "thinking":
+      ctx.patchAssistant(assistantId, (m) => {
+        m.thinkingBlocks.push({
+          content: frame.content,
+          ...(frame.thinkingLevel === undefined ? {} : { thinkingLevel: frame.thinkingLevel }),
+        });
       });
       break;
     case "tool_start":
