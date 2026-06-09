@@ -60,7 +60,6 @@ export function BatchResults({ jobId, onOpenProject, onBack }: BatchResultsProps
     for (const item of successfulItems) {
       if (item.projectId !== undefined) {
         onOpenProject(item.projectId);
-        break; // open the first one; remaining can be opened individually
       }
     }
   }, [successfulItems, onOpenProject]);
@@ -156,7 +155,7 @@ export function BatchResults({ jobId, onOpenProject, onBack }: BatchResultsProps
                     onClick={handleOpenAll}
                   >
                     <FolderOpen className="h-4 w-4" />
-                    Open First Proposal
+                    Open All
                   </Button>
                 )}
               </>
