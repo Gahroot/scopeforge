@@ -4,18 +4,20 @@ ScopeForge is a deterministic TypeScript engine that turns a structured build re
 
 ## Current state
 
-Engine-only. Despite the Vite setup (`dev`/`build`/`preview` scripts), there is **no UI, CLI, or server** — no `index.html`, `main.ts`, or components. The shipped surface is the pure `src/core` library. `package.json` has no `bin`, `main`, or `exports` field.
+Full application: deterministic core engine + Node app server + React UI + agent copilot + CLI (`bin: dist/cli/main.js`). The engine in `src/core` remains the pure, deterministic heart; everything else layers on top of it.
 
 ## Structure
 
-- `src/core/index.ts` — public entry. `analyzeProject(project, opts)` orchestrates the three lenses + guardrails; re-exports the whole surface.
-- `src/core/types.ts` — single source of truth for all data shapes (`Project`, `CostModel`, `ValueModel`, `PricingModel`, `Analysis`). Leaf module, no imports.
-- `src/core/cost.ts` — Lens A. Monte-Carlo cost floor (triangular sampling, AI factors, margin). `DEFAULT_ITERATIONS` = 50,000; `CORRELATION_RISK_PAD` = 0.18.
-- `src/core/value.ts` — Lens B. First-year realized value; keeps `futureUpside` out of payback.
-- `src/core/pricing.ts` — Lens C. Value-fraction price anchor + payback months; `leadPrice` helper.
-- `src/core/guardrails.ts` — methodology rules encoded as `Warning[]`. Lives in core by design so no UI can bypass them.
-- `src/core/random.ts`, `src/core/stats.ts` — shared primitives (mulberry32 `makeRng` + `triangular`; `percentile`/`sum`).
-- `src/data/defaults.ts` — `createDefaultProject()` + `tritenExample` fixture (a real engagement, used as test basis).
+- `src/core/` — the deterministic engine. `index.ts` exposes `analyzeProject(project, opts)` (three lenses + guardrails) and `runSensitivity` (one-parameter what-if sweeps). `types.ts` is the leaf source of truth; `cost.ts` (Lens A, Monte-Carlo cost floor, `DEFAULT_ITERATIONS` = 50,000, `CORRELATION_RISK_PAD` = 0.18); `value.ts` (Lens B, keeps `futureUpside` out of payback); `pricing.ts` (Lens C); `guardrails.ts` (methodology rules as `Warning[]`, in core so no UI can bypass them); `random.ts`/`stats.ts` (mulberry32 `makeRng`, `triangular`, `percentile`).
+- `src/data/` — `createDefaultProject()` + `tritenExample` fixture; JSON schema validation.
+- `src/server/` — Node app server (`appServer.ts`), HTTP routes (`routes.ts`, includes the `ProposalProjectStore` interface), agent SSE streaming (`agentStream.node.ts`), batch ingestion (`batch.ts`), share-link engagement tracking (`trackingStore.ts`/`trackingScript.ts`).
+- `src/agent/` — proposal copilot: provider config/credentials (OAuth for Anthropic/OpenAI under `oauth/`), session state, and the tool belt under `tools/`.
+- `src/proposal/` — proposal draft model, hand-rolled validation (`schema.ts`, path-based errors), draft/template stores, built-in templates under `templates/`, acceptance records.
+- `src/project/` — versioned on-disk project store (`store.node.ts`, atomic writes, branded ids).
+- `src/render/` — HTML/PDF proposal renderers. All user data must pass through `htmlEscape.ts` and colors through `safeCssColor` — these renderers are XSS surface.
+- `src/ingest/` — source-material extraction (text/PDF/image) with size limits in `limits.ts`.
+- `src/ui/` — React 18 + Tailwind + shadcn-style app (chat, draft preview, projects, ingest, brand).
+- `src/cli/` — `scopeforge` CLI + proposal generator.
 - `docs/ARCHITECTURE.md` — three-lens methodology rationale.
 
 ## Determinism (project invariant)
@@ -24,9 +26,14 @@ The core never calls `Math.random()`. All sampling takes an injected seeded `Rng
 
 ## Commands
 
-- `npm run dev` / `npm run build` (`tsc && vite build`) / `npm run preview`
-- `npm test` (`vitest run`) — single run
-- `npm run test:watch` — Vitest watch
+- `npm run dev` (Vite UI only) / `npm run app:dev` (app server + Vite) / `npm run build` (`vite build && tsc`) / `npm run preview`
+- `npm test` (`vitest run`) — single run; `npm run test:watch` — watch mode
 - `npm run typecheck` — `tsc --noEmit`
+- `npm run lint` — Biome lint; `npm run format` / `format:check` — Biome format
+- `npm run proposal` / `proposal:sample` — proposal PDF/HTML generation
 
-Node `>=24` required (`.nvmrc` pins `24`). npm (lockfileVersion 3). No lint/format scripts exist.
+Node `>=24` required (`.nvmrc` pins `24`). npm (lockfileVersion 3).
+
+## Conventions
+
+Strict tsconfig (`exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`); use conditional spreads (`...(x === undefined ? {} : { x })`) for optional fields. Named exports only, `.js` import specifiers, no `any`, no non-null `!` assertions (Biome enforces). Zod v4: `error.issues`, not `error.errors`.

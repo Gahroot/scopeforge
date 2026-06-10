@@ -21,9 +21,7 @@ export function ThinkingBlock({ content, thinkingLevel }: ThinkingBlockProps): J
         <ChevronRight
           className={cn("h-3.5 w-3.5 shrink-0 transition-transform", expanded && "rotate-90")}
         />
-        <span>
-          🧠 Thinking{thinkingLevel !== undefined ? ` (${thinkingLevel})` : ""}…
-        </span>
+        <span>🧠 Thinking{thinkingLevel !== undefined ? ` (${thinkingLevel})` : ""}…</span>
       </button>
       {expanded && (
         <div className="border-t border-border/50 px-3 py-2">

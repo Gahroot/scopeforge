@@ -5,11 +5,11 @@
  * Must be injected just before </body> in the rendered proposal HTML.
  */
 export function buildTrackingScript(token: string): string {
-  const endpoint = `/api/view/${escapeJsString(token)}/track`;
+  const endpoint = `/api/view/${encodeURIComponent(token)}/track`;
   return `<script>
 (function(){
-  var TOKEN=${JSON.stringify(token)};
-  var EP=${JSON.stringify(endpoint)};
+  var TOKEN=${serializeForInlineScript(token)};
+  var EP=${serializeForInlineScript(endpoint)};
   var viewerId;
   try{viewerId=sessionStorage.getItem("sf_vid")}catch(e){}
   if(!viewerId){viewerId="v-"+Math.random().toString(36).slice(2,10);try{sessionStorage.setItem("sf_vid",viewerId)}catch(e){}}
@@ -25,10 +25,12 @@ export function buildTrackingScript(token: string): string {
   // 1. Page view
   post("viewed");
 
-  // 2. Time-on-page (sent periodically and on unload)
+  // 2. Time-on-page (sent periodically and on unload, capped at 30 minutes)
   var startTime=Date.now();
+  var MAX_TIME_ON_PAGE_SECONDS=1800;
   var timeInterval=setInterval(function(){
     var elapsed=Math.round((Date.now()-startTime)/1000);
+    if(elapsed>MAX_TIME_ON_PAGE_SECONDS){clearInterval(timeInterval);return}
     post("time_on_page",{duration:elapsed});
   },30000);
 
@@ -59,7 +61,10 @@ export function buildTrackingScript(token: string): string {
   if(pricingEl&&typeof IntersectionObserver!=="undefined"){
     var pricingObserver=new IntersectionObserver(function(entries){
       entries.forEach(function(entry){
-        if(entry.isIntersecting){post("pricing_focus",{section:"investment-next-steps"})}
+        if(entry.isIntersecting){
+          pricingObserver.disconnect();
+          post("pricing_focus",{section:"investment-next-steps"});
+        }
       });
     },{threshold:0.5});
     pricingObserver.observe(pricingEl);
@@ -82,6 +87,11 @@ export function buildTrackingScript(token: string): string {
 </script>`;
 }
 
-function escapeJsString(input: string): string {
-  return input.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/</g, "\\x3c");
+/**
+ * Serialize a string for embedding inside an inline <script>. JSON.stringify
+ * handles quoting/escaping; `<` is additionally escaped so a value containing
+ * `</script>` can never terminate the script element.
+ */
+function serializeForInlineScript(value: string): string {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
 }

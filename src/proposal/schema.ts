@@ -29,7 +29,19 @@ import type {
 export const PROPOSAL_DRAFT_TEMPLATE_IDS = [
   "generic/value-proposal",
   "generic/scope-review",
+  "built-in/generic-proposal",
+  "built-in/triten-value-proposal",
+  "built-in/internal-review-appendix",
+  "built-in/executive-summary",
+  "built-in/saas-dashboard",
+  "built-in/mobile-app",
+  "built-in/automation-pipeline",
+  "built-in/consulting-engagement",
 ] as const satisfies readonly ProposalDraftTemplateId[];
+
+/** Custom templates saved by the template store get ids of the form `custom/<uuid v4>`. */
+const CUSTOM_TEMPLATE_ID_PATTERN =
+  /^custom\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const PROPOSAL_DRAFT_STATUSES = [
   "draft",
@@ -196,7 +208,13 @@ function validateProposalDraftTemplateIds(
 ): boolean {
   return validateArray(input, path, errors, { minLength: 1 }, (item, itemPath) => {
     if (!isProposalDraftTemplateId(item)) {
-      addError(errors, itemPath, "Must be a non-empty string.");
+      addError(
+        errors,
+        itemPath,
+        `Must be a built-in template id (one of: ${PROPOSAL_DRAFT_TEMPLATE_IDS.join(
+          ", ",
+        )}) or a saved custom template id of the form custom/<uuid>.`,
+      );
     }
   });
 }
@@ -331,12 +349,18 @@ function validateProposalRampYear(
     addError(errors, path, "Ramp year must be an object.");
     return;
   }
-  validateNumber(input.year, `${path}.year`, errors, { integer: true, minInclusive: 1, label: "Year" });
+  validateNumber(input.year, `${path}.year`, errors, {
+    integer: true,
+    minInclusive: 1,
+    label: "Year",
+  });
   validateNumber(input.low, `${path}.low`, errors, { label: "Ramp low" });
   validateNumber(input.high, `${path}.high`, errors, { label: "Ramp high" });
   validateOptionalString(input, "label", `${path}.label`, errors);
   validateNumber(input.cumulativeLow, `${path}.cumulativeLow`, errors, { label: "Cumulative low" });
-  validateNumber(input.cumulativeHigh, `${path}.cumulativeHigh`, errors, { label: "Cumulative high" });
+  validateNumber(input.cumulativeHigh, `${path}.cumulativeHigh`, errors, {
+    label: "Cumulative high",
+  });
 }
 
 function validateProposalValueSourceRow(
@@ -752,7 +776,9 @@ function hasPricedPhase(input: unknown): boolean {
 }
 
 function isProposalDraftTemplateId(input: unknown): input is ProposalDraftTemplateId {
-  return typeof input === "string" && input.trim().length > 0;
+  if (typeof input !== "string") return false;
+  if (PROPOSAL_DRAFT_TEMPLATE_IDS.some((candidate) => candidate === input)) return true;
+  return CUSTOM_TEMPLATE_ID_PATTERN.test(input);
 }
 
 function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {

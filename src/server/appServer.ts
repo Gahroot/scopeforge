@@ -14,14 +14,23 @@ import {
 } from "../agent/config.node.js";
 import { AgentCredentialsStore } from "../agent/credentials.node.js";
 import { createSessionStore, type SessionStore } from "../agent/session.node.js";
-import { addBreadcrumb, installGlobalDiagnostics, logError, logEvent } from "../diagnostics/logger.node.js";
+import { MAX_SOURCE_MATERIAL_BASE64_CHARS } from "../ingest/limits.js";
+import {
+  addBreadcrumb,
+  installGlobalDiagnostics,
+  logError,
+  logEvent,
+} from "../diagnostics/logger.node.js";
 import { handleAgentMessages } from "./agentStream.node.js";
 import { handleApiRoute, type ApiRouteResponse, type AppRouteDependencies } from "./routes.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 4174;
 const DEFAULT_STATIC_DIR = "dist";
-const MAX_JSON_BYTES = 4 * 1024 * 1024;
+// The largest advertised payload is a base64-encoded image (one byte per
+// base64 character in UTF-8). Allow headroom for the rest of the JSON body.
+const JSON_BODY_HEADROOM_BYTES = 1024 * 1024;
+const MAX_JSON_BYTES = MAX_SOURCE_MATERIAL_BASE64_CHARS + JSON_BODY_HEADROOM_BYTES;
 
 export interface AppServerOptions {
   readonly host?: string;
@@ -77,7 +86,12 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ru
 
   const context: RequestContext = {
     staticDir,
-    routes: { ...(options.routes ?? {}), agentSummary, envAgentConfig: agentConfig, credentialsStore },
+    routes: {
+      ...(options.routes ?? {}),
+      agentSummary,
+      envAgentConfig: agentConfig,
+      credentialsStore,
+    },
     envAgentConfig: agentConfig,
     credentialsStore,
     sessions: createSessionStore(
@@ -127,7 +141,11 @@ async function handleNodeRequest(
   const startedAt = performance.now();
   const method = request.method ?? "GET";
   const abortController = new AbortController();
-  request.on("aborted", () => abortController.abort());
+  // The request "aborted" event is deprecated and never fires once the body has
+  // been fully read; the response "close" event reliably signals disconnects.
+  response.on("close", () => {
+    if (!response.writableEnded) abortController.abort();
+  });
 
   let pathname = "/";
   let status = 500;
@@ -136,6 +154,12 @@ async function handleNodeRequest(
     const url = new URL(request.url ?? "/", "http://scopeforge.local");
     pathname = url.pathname;
     addBreadcrumb("scopeforge.request.received", { method, pathname });
+
+    // Rewrite /view/:token to /api/view/:token for browser-navigable share links.
+    const isViewRoute = pathname.startsWith("/view/") && !pathname.startsWith("/api/");
+    if (isViewRoute) {
+      pathname = `/api${pathname}`;
+    }
 
     if (pathname.startsWith("/api")) {
       addBreadcrumb("scopeforge.request.api", { method, pathname });

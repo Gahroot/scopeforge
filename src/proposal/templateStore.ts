@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Dirent } from "node:fs";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,10 +10,7 @@ import { validateProposalDraft } from "./schema.js";
 // Constants
 // ---------------------------------------------------------------------------
 
-const BUILT_IN_TEMPLATES_DIR = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "templates",
-);
+const BUILT_IN_TEMPLATES_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "templates");
 
 const DEFAULT_CUSTOM_TEMPLATES_DIR = ".scopeforge/templates";
 
@@ -51,9 +49,7 @@ export interface TemplateStore {
 // Template store factory
 // ---------------------------------------------------------------------------
 
-export function createTemplateStore(
-  options: TemplateStoreOptions = {},
-): TemplateStore {
+export function createTemplateStore(options: TemplateStoreOptions = {}): TemplateStore {
   const builtInDir = options.builtInDir ?? BUILT_IN_TEMPLATES_DIR;
   const customDir = resolve(options.customDir ?? DEFAULT_CUSTOM_TEMPLATES_DIR);
   const builtInCache = new Map<string, ProposalTemplateWithDraft>();
@@ -76,7 +72,7 @@ async function loadBuiltInTemplates(
 ): Promise<readonly ProposalTemplateWithDraft[]> {
   if (cache.size > 0) return [...cache.values()];
 
-  let entries;
+  let entries: readonly Dirent[];
   try {
     entries = await readdir(builtInDir, { withFileTypes: true });
   } catch {
@@ -101,7 +97,7 @@ async function loadBuiltInTemplates(
         description: parsed.description,
         category: parsed.category,
         builtIn: true,
-        author: parsed.author,
+        ...(parsed.author === undefined ? {} : { author: parsed.author }),
         tags: [...parsed.tags],
       };
 
@@ -171,12 +167,13 @@ async function saveTemplate(
     category: input.category,
     builtIn: false,
     createdAt: now,
-    author: input.author,
+    ...(input.author === undefined ? {} : { author: input.author }),
     tags: [...input.tags],
   };
 
-  const fileData: BuiltInTemplateFile = {
+  const fileData: CustomTemplateFile = {
     ...template,
+    createdAt: now,
     draft: input.draft,
   };
 
@@ -187,10 +184,7 @@ async function saveTemplate(
   return template;
 }
 
-async function deleteTemplate(
-  customDir: string,
-  templateId: string,
-): Promise<boolean> {
+async function deleteTemplate(customDir: string, templateId: string): Promise<boolean> {
   if (templateId.startsWith("built-in/")) return false;
 
   const filePath = join(customDir, `${encodeTemplateId(templateId)}.json`);
@@ -206,10 +200,8 @@ async function deleteTemplate(
 // Custom template helpers
 // ---------------------------------------------------------------------------
 
-async function loadCustomTemplateMetadata(
-  customDir: string,
-): Promise<readonly ProposalTemplate[]> {
-  let entries;
+async function loadCustomTemplateMetadata(customDir: string): Promise<readonly ProposalTemplate[]> {
+  let entries: readonly Dirent[];
   try {
     entries = await readdir(customDir, { withFileTypes: true });
   } catch {
@@ -231,8 +223,8 @@ async function loadCustomTemplateMetadata(
         description: parsed.description,
         category: parsed.category,
         builtIn: false,
-        createdAt: parsed.createdAt,
-        author: parsed.author,
+        ...(parsed.createdAt === undefined ? {} : { createdAt: parsed.createdAt }),
+        ...(parsed.author === undefined ? {} : { author: parsed.author }),
         tags: [...parsed.tags],
       });
     } catch {
@@ -248,7 +240,7 @@ async function loadCustomTemplate(
   templateId: string,
 ): Promise<ProposalTemplateWithDraft | null> {
   const filePath = join(customDir, `${encodeTemplateId(templateId)}.json`);
-  let raw;
+  let raw: string;
   try {
     raw = await readFile(filePath, "utf8");
   } catch {
@@ -273,8 +265,8 @@ async function loadCustomTemplate(
     description: parsed.description,
     category: parsed.category,
     builtIn: false,
-    createdAt: parsed.createdAt,
-    author: parsed.author,
+    ...(parsed.createdAt === undefined ? {} : { createdAt: parsed.createdAt }),
+    ...(parsed.author === undefined ? {} : { author: parsed.author }),
     tags: [...parsed.tags],
     draft: validation.value,
   };
@@ -319,6 +311,10 @@ interface BuiltInTemplateFile {
   readonly draft: unknown;
 }
 
+interface CustomTemplateFile extends BuiltInTemplateFile {
+  readonly createdAt?: string;
+}
+
 function isBuiltInTemplateFile(input: unknown): input is BuiltInTemplateFile {
   if (!isRecord(input)) return false;
   return (
@@ -332,13 +328,14 @@ function isBuiltInTemplateFile(input: unknown): input is BuiltInTemplateFile {
   );
 }
 
-function isCustomTemplateFile(input: unknown): input is BuiltInTemplateFile {
+function isCustomTemplateFile(input: unknown): input is CustomTemplateFile {
   if (!isRecord(input)) return false;
   return (
     typeof input.templateId === "string" &&
     typeof input.name === "string" &&
     typeof input.description === "string" &&
     typeof input.category === "string" &&
+    (input.createdAt === undefined || typeof input.createdAt === "string") &&
     Array.isArray(input.tags) &&
     input.draft !== undefined
   );

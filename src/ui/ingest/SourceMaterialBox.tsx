@@ -231,6 +231,8 @@ function sourceKindLabel(kind: SourceMaterialKind): string {
       return "JSON source material";
     case "pdf":
       return "PDF source material";
+    case "image":
+      return "Image source material";
   }
 }
 

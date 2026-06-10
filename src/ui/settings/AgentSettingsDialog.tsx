@@ -27,7 +27,9 @@ const DEFAULT_PROVIDER_OPTIONS = [
   { provider: "xiaomi", label: "Xiaomi" },
 ] as const;
 
-const PROVIDER_HELP: Readonly<Record<string, { readonly exampleModel: string; readonly note: string }>> = {
+const PROVIDER_HELP: Readonly<
+  Record<string, { readonly exampleModel: string; readonly note: string }>
+> = {
   anthropic: {
     exampleModel: "claude-sonnet-4-20250514",
     note: "Use an Anthropic API key or Claude/Anthropic OAuth.",
@@ -99,7 +101,8 @@ export function AgentSettingsDialog({ onAgentChanged }: AgentSettingsDialogProps
 
   const providerOptions = settings?.providers ?? DEFAULT_PROVIDER_OPTIONS;
   const selectedCredentials = settings?.credentials.find((item) => item.provider === provider);
-  const selectedProviderLabel = providerOptions.find((item) => item.provider === provider)?.label ?? provider;
+  const selectedProviderLabel =
+    providerOptions.find((item) => item.provider === provider)?.label ?? provider;
   const selectedProviderHelp = PROVIDER_HELP[provider] ?? {
     exampleModel: "provider-model-id",
     note: "Model IDs are passed through to the selected provider.",
@@ -195,7 +198,10 @@ export function AgentSettingsDialog({ onAgentChanged }: AgentSettingsDialogProps
               </Button>
             </div>
 
-            <ProviderCredentialList credentials={settings?.credentials ?? []} selectedProvider={provider} />
+            <ProviderCredentialList
+              credentials={settings?.credentials ?? []}
+              selectedProvider={provider}
+            />
 
             <div className="mt-5 rounded-md border p-4">
               <div className="mb-2 text-sm font-medium">API key for {selectedProviderLabel}</div>
@@ -288,7 +294,8 @@ export function AgentSettingsDialog({ onAgentChanged }: AgentSettingsDialogProps
               <div className="mt-4 rounded-md border p-4">
                 <div className="mb-2 text-sm font-medium">OpenAI subscription</div>
                 <p className="mb-3 text-xs text-muted-foreground">
-                  Sign in with ChatGPT to use OpenAI Codex models through your subscription. ScopeForge stores the OAuth token locally and refreshes it server-side.
+                  Sign in with ChatGPT to use OpenAI Codex models through your subscription.
+                  ScopeForge stores the OAuth token locally and refreshes it server-side.
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button asChild className="w-full sm:w-auto" size="lg">
@@ -359,7 +366,8 @@ function ProviderCredentialList({
 function credentialStatus(credential: AgentCredentialSummary | undefined): string {
   if (credential === undefined || !credential.configured) return "not configured";
   const kind = credential.authKind === "oauth" ? "OAuth" : "API key";
-  const expiry = credential.expiresAt === undefined ? "" : ` · expires ${formatExpiry(credential.expiresAt)}`;
+  const expiry =
+    credential.expiresAt === undefined ? "" : ` · expires ${formatExpiry(credential.expiresAt)}`;
   return `${kind} configured${expiry}`;
 }
 

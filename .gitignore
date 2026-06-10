@@ -12,6 +12,9 @@ out/
 # local server-side project store
 .scopeforge/
 
+# test artifacts written by vitest (store/acceptance roundtrip tests)
+.scopeforge-test/
+
 .ezcoder/
 
 # stray secret scratch file (contains API key)

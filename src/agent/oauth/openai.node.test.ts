@@ -6,7 +6,8 @@ import {
 } from "./openai.node.js";
 
 function makeJwt(payload: Readonly<Record<string, unknown>>): string {
-  const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const encode = (value: unknown): string =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
   return `${encode({ alg: "none", typ: "JWT" })}.${encode(payload)}.signature`;
 }
 
@@ -45,6 +46,26 @@ describe("openai oauth", () => {
       refreshToken: "next-refresh-token",
       accountId: "account-123",
       email: "operator@example.com",
+    });
+    fetchMock.mockRestore();
+  });
+
+  it("preserves the previous refresh token when the refresh response omits one", async () => {
+    const accessToken = makeJwt({
+      email: "operator@example.com",
+      "https://api.openai.com/auth": { chatgpt_account_id: "account-123" },
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({
+        access_token: accessToken,
+        expires_in: 3600,
+      }),
+    );
+
+    await expect(refreshOpenAIToken("keep-this-refresh")).resolves.toMatchObject({
+      accessToken,
+      refreshToken: "keep-this-refresh",
+      accountId: "account-123",
     });
     fetchMock.mockRestore();
   });

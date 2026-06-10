@@ -66,6 +66,7 @@ import {
 import type {
   CommitProposalProjectVersionInput,
   CreateProposalProjectInput,
+  ProposalAcceptance,
   ProposalArtifactRenderMetadata,
   ProposalArtifactMetadata,
   ProposalAuthorId,
@@ -117,6 +118,7 @@ import {
   parseMultipartBody,
   buildBatchItemsFromMultipart,
   loadJobResult,
+  type MultipartPart,
 } from "./batch.js";
 import {
   createTemplateStore,
@@ -245,6 +247,11 @@ export interface ProposalProjectStore {
     projectId: ProposalProjectId,
     input: SaveProposalProjectArtifactInput,
   ) => Promise<SaveProposalProjectArtifactResult | null>;
+  readonly saveAcceptance: (
+    projectId: ProposalProjectId,
+    acceptance: ProposalAcceptance,
+  ) => Promise<void>;
+  readonly getAcceptance: (projectId: ProposalProjectId) => Promise<ProposalAcceptance | null>;
 }
 
 export interface AppRouteDependencies {
@@ -258,7 +265,9 @@ export interface AppRouteDependencies {
   readonly envAgentConfig?: AgentConfig;
   readonly credentialsStore?: AgentCredentialsStore;
   readonly pendingAnthropicOAuth?: Map<string, PendingAnthropicOAuth>;
-  readonly startOpenAIOAuth?: (input: { readonly credentialsStore: AgentCredentialsStore }) => Promise<PendingOpenAIOAuth>;
+  readonly startOpenAIOAuth?: (input: {
+    readonly credentialsStore: AgentCredentialsStore;
+  }) => Promise<PendingOpenAIOAuth>;
   readonly runProposalAgentStream?: ProposalAgentStreamRunner;
   readonly shareStore?: ShareTokenStore;
   readonly engagementTracker?: EngagementTracker;
@@ -518,34 +527,22 @@ async function handleProposalProjectRoute(
       if (request.method === "POST") {
         return createShareTokenResponse(route.projectId, dependencies);
       }
-      return methodNotAllowedResponse(
-        "POST",
-        "Share token creation requires a POST request.",
-      );
+      return methodNotAllowedResponse("POST", "Share token creation requires a POST request.");
     case "analytics":
       if (request.method === "GET") {
         return projectAnalyticsResponse(route.projectId, dependencies);
       }
-      return methodNotAllowedResponse(
-        "GET",
-        "Project analytics is read-only.",
-      );
+      return methodNotAllowedResponse("GET", "Project analytics is read-only.");
     case "accept":
       if (request.method === "POST") {
         return acceptProposalResponse(route.projectId, request.body, dependencies);
       }
-      return methodNotAllowedResponse(
-        "POST",
-        "Proposal acceptance requires a POST request.",
-      );
+      return methodNotAllowedResponse("POST", "Proposal acceptance requires a POST request.");
     case "acceptance":
       if (request.method === "GET") {
         return getAcceptanceResponse(route.projectId, dependencies);
       }
-      return methodNotAllowedResponse(
-        "GET",
-        "Proposal acceptance retrieval is read-only.",
-      );
+      return methodNotAllowedResponse("GET", "Proposal acceptance retrieval is read-only.");
   }
 }
 
@@ -2290,7 +2287,9 @@ async function redirectOpenAIOAuthResponse(
   return redirectResponse(transaction.authUrl);
 }
 
-async function startOpenAIOAuthResponse(dependencies: AppRouteDependencies): Promise<ApiRouteResponse> {
+async function startOpenAIOAuthResponse(
+  dependencies: AppRouteDependencies,
+): Promise<ApiRouteResponse> {
   const transaction = await createPendingOpenAIOAuthTransaction(dependencies);
   return jsonResponse(200, {
     ok: true,
@@ -2403,9 +2402,7 @@ async function ingestSourceMaterialResponse(
   if (!request.ok) return request.response;
 
   const agentConfig =
-    dependencies.envAgentConfig?.enabled === true
-      ? dependencies.envAgentConfig
-      : undefined;
+    dependencies.envAgentConfig?.enabled === true ? dependencies.envAgentConfig : undefined;
 
   const fileSourceName = request.value.file?.name ?? request.value.sourceName;
   const extracted =
@@ -2421,18 +2418,22 @@ async function ingestSourceMaterialResponse(
           origin: "paste",
           maxTextCharacters: MAX_SOURCE_MATERIAL_TEXT_CHARS,
         })
-      : await extractSourceMaterialFromFile({
-          bytes: request.value.file.bytes,
-          ...(fileSourceName === undefined ? {} : { fileName: fileSourceName }),
-          ...(request.value.file.mediaType === undefined
-            ? {}
-            : { mediaType: request.value.file.mediaType }),
-          ...(request.value.sourceKind === undefined
-            ? {}
-            : { sourceKind: request.value.sourceKind }),
-          maxBytes: MAX_SOURCE_MATERIAL_FILE_BYTES,
-          maxTextCharacters: MAX_SOURCE_MATERIAL_TEXT_CHARS,
-        }, agentConfig);
+      : await extractSourceMaterialFromFile(
+          {
+            bytes: request.value.file.bytes,
+            ...(fileSourceName === undefined ? {} : { fileName: fileSourceName }),
+            ...(request.value.file.mediaType === undefined
+              ? {}
+              : { mediaType: request.value.file.mediaType }),
+            ...(request.value.sourceKind === undefined
+              ? {}
+              : { sourceKind: request.value.sourceKind }),
+            // No maxBytes override: the extractor applies the kind-aware default
+            // (larger limit for images, MAX_SOURCE_MATERIAL_FILE_BYTES otherwise).
+            maxTextCharacters: MAX_SOURCE_MATERIAL_TEXT_CHARS,
+          },
+          agentConfig,
+        );
 
   if (!extracted.ok) return sourceMaterialFailureResponse(extracted.error);
   const candidate = createProposalDraftCandidate(extracted.document);
@@ -2964,7 +2965,11 @@ function resolveSensitivityInput(
   const param = typeof rawSensitivity.param === "string" ? rawSensitivity.param.trim() : "";
   if (param.length === 0) {
     return routeFailure(
-      failureResponse(400, "sensitivity_param_invalid", "sensitivity.param must be a non-empty string."),
+      failureResponse(
+        400,
+        "sensitivity_param_invalid",
+        "sensitivity.param must be a non-empty string.",
+      ),
     );
   }
 
@@ -3576,7 +3581,11 @@ async function viewSharedProposalResponse(
 
   const project = store.value.get(record.projectId);
   if (project === null) {
-    return failureResponse(404, "project_not_found", "The shared proposal project no longer exists.");
+    return failureResponse(
+      404,
+      "project_not_found",
+      "The shared proposal project no longer exists.",
+    );
   }
 
   const version = project.versions.find((v) => v.versionId === record.versionId);
@@ -3590,10 +3599,7 @@ async function viewSharedProposalResponse(
 
   const brand = version.sourceOfTruth.vendorBrand;
   const html = renderValueProposalHtml(version.sourceOfTruth.draft, { brand });
-  const trackedHtml = html.replace(
-    /<\/body>/,
-    `${buildTrackingScript(String(token))}\n</body>`,
-  );
+  const trackedHtml = html.replace(/<\/body>/, `${buildTrackingScript(String(token))}\n</body>`);
 
   // Client-side script records the 'viewed' event with a stable viewer ID.
   const bytes = new TextEncoder().encode(trackedHtml);
@@ -3688,7 +3694,7 @@ async function acceptProposalResponse(
   const loaded = await loadProposalProject(projectId, dependencies);
   if (!loaded.ok) return loaded.response;
 
-  const resolved = resolveAcceptProposalInput(input, loaded.value.project);
+  const resolved = resolveAcceptProposalInput(input);
   if (!resolved.ok) return resolved.response;
 
   const acceptInput = resolved.value;
@@ -3798,9 +3804,7 @@ async function acceptProposalResponse(
       ok: true,
       acceptance,
       project: updated,
-      ...(currentVersionResult === null
-        ? {}
-        : { currentVersion: currentVersionResult }),
+      ...(currentVersionResult === null ? {} : { currentVersion: currentVersionResult }),
     });
   } catch (error) {
     if (isProposalProjectVersionConflictError(error)) {
@@ -3838,10 +3842,7 @@ async function getAcceptanceResponse(
   });
 }
 
-function resolveAcceptProposalInput(
-  input: unknown,
-  project: ProposalProject,
-): RouteValueResult<AcceptProposalInput> {
+function resolveAcceptProposalInput(input: unknown): RouteValueResult<AcceptProposalInput> {
   if (!isRecord(input)) {
     return routeFailure(
       failureResponse(
@@ -3852,28 +3853,53 @@ function resolveAcceptProposalInput(
     );
   }
 
-  const clientName = readRequiredRouteString(input, "clientName", "client_name_required", "clientName");
+  const clientName = readRequiredRouteString(
+    input,
+    "clientName",
+    "client_name_required",
+    "clientName",
+  );
   if (!clientName.ok) return clientName;
 
-  const signatureType = readRequiredRouteString(input, "signatureType", "signature_type_invalid", "signatureType");
+  const signatureType = readRequiredRouteString(
+    input,
+    "signatureType",
+    "signature_type_invalid",
+    "signatureType",
+  );
   if (!signatureType.ok) return signatureType;
   if (signatureType.value !== "typed" && signatureType.value !== "drawn") {
     return routeFailure(
       failureResponse(
         400,
         "signature_type_invalid",
-        "signatureType must be either \"typed\" or \"drawn\".",
+        'signatureType must be either "typed" or "drawn".',
       ),
     );
   }
 
-  const signatureData = readRequiredRouteString(input, "signatureData", "signature_data_required", "signatureData");
+  const signatureData = readRequiredRouteString(
+    input,
+    "signatureData",
+    "signature_data_required",
+    "signatureData",
+  );
   if (!signatureData.ok) return signatureData;
 
-  const clientTitle = readOptionalRouteString(input, "clientTitle", "client_title_invalid", "clientTitle");
+  const clientTitle = readOptionalRouteString(
+    input,
+    "clientTitle",
+    "client_title_invalid",
+    "clientTitle",
+  );
   if (!clientTitle.ok) return clientTitle;
 
-  const clientEmail = readOptionalRouteString(input, "clientEmail", "client_email_invalid", "clientEmail");
+  const clientEmail = readOptionalRouteString(
+    input,
+    "clientEmail",
+    "client_email_invalid",
+    "clientEmail",
+  );
   if (!clientEmail.ok) return clientEmail;
 
   const baseVersionId = resolveOptionalProjectVersionId(input, "baseVersionId");
@@ -3956,10 +3982,7 @@ async function handleTemplateRoute(
       if (request.method === "POST") {
         return saveTemplateResponse(request.body, dependencies);
       }
-      return methodNotAllowedResponse(
-        "GET, POST",
-        "Template collections support list and create.",
-      );
+      return methodNotAllowedResponse("GET, POST", "Template collections support list and create.");
     case "single":
       if (request.method === "GET") {
         return getTemplateResponse(route.templateId, dependencies);
@@ -3973,7 +3996,7 @@ async function handleTemplateRoute(
       );
     case "use":
       if (request.method === "POST") {
-        return useTemplateResponse(route.templateId, request.body, dependencies);
+        return applyTemplateResponse(route.templateId, request.body, dependencies);
       }
       return methodNotAllowedResponse("POST", "Template use requires a POST request.");
   }
@@ -4000,11 +4023,7 @@ async function getTemplateResponse(
   const store = resolveTemplateStore(dependencies);
   const template = await store.get(templateId);
   if (template === null) {
-    return failureResponse(
-      404,
-      "template_not_found",
-      `Template not found: ${templateId}.`,
-    );
+    return failureResponse(404, "template_not_found", `Template not found: ${templateId}.`);
   }
   return jsonResponse(200, {
     ok: true,
@@ -4088,7 +4107,7 @@ async function deleteTemplateResponse(
   });
 }
 
-async function useTemplateResponse(
+async function applyTemplateResponse(
   templateId: string,
   input: unknown,
   dependencies: AppRouteDependencies,
@@ -4096,11 +4115,7 @@ async function useTemplateResponse(
   const store = resolveTemplateStore(dependencies);
   const template = await store.get(templateId);
   if (template === null) {
-    return failureResponse(
-      404,
-      "template_not_found",
-      `Template not found: ${templateId}.`,
-    );
+    return failureResponse(404, "template_not_found", `Template not found: ${templateId}.`);
   }
 
   // Create a new proposal project from the template draft.
@@ -4216,9 +4231,7 @@ function parseBatchRoute(pathname: string): BatchRouteAction | null {
     return { action: "submitMultipart" };
   }
 
-  const segments = rest
-    .split("/")
-    .filter((segment) => segment.length > 0);
+  const segments = rest.split("/").filter((segment) => segment.length > 0);
 
   if (segments.length === 0) return { action: "submit" };
 
@@ -4268,10 +4281,7 @@ async function handleBatchRoute(
       if (request.method === "GET") {
         return batchJobResultsResponse(route.jobId);
       }
-      return methodNotAllowedResponse(
-        "GET",
-        "Batch job results are read-only.",
-      );
+      return methodNotAllowedResponse("GET", "Batch job results are read-only.");
     case "cancel":
       if (request.method === "DELETE") {
         return batchCancelResponse(route.jobId);
@@ -4286,17 +4296,22 @@ async function batchSubmitResponse(
 ): Promise<ApiRouteResponse> {
   const validation = validateBatchSubmitInput(input);
   if (!validation.ok) {
-    return failureResponse(validation.status, validation.code, validation.message, validation.details);
+    return failureResponse(
+      validation.status,
+      validation.code,
+      validation.message,
+      validation.details,
+    );
   }
 
   const agentConfig =
-    dependencies.envAgentConfig?.enabled === true
-      ? dependencies.envAgentConfig
-      : undefined;
+    dependencies.envAgentConfig?.enabled === true ? dependencies.envAgentConfig : undefined;
 
   const result = submitBatchJob(validation.value.items, {
-    agentConfig,
-    projectStore: dependencies.proposalProjectStore,
+    ...(agentConfig === undefined ? {} : { agentConfig }),
+    ...(dependencies.proposalProjectStore === undefined
+      ? {}
+      : { projectStore: dependencies.proposalProjectStore }),
   });
 
   return jsonResponse(201, {
@@ -4336,7 +4351,7 @@ async function batchMultipartSubmitResponse(
   }
 
   const rawBuffer = Buffer.from(base64Body, "base64");
-  let parts;
+  let parts: readonly MultipartPart[];
   try {
     parts = await parseMultipartBody(contentType, rawBuffer);
   } catch (error) {
@@ -4354,13 +4369,13 @@ async function batchMultipartSubmitResponse(
   }
 
   const agentConfig =
-    dependencies.envAgentConfig?.enabled === true
-      ? dependencies.envAgentConfig
-      : undefined;
+    dependencies.envAgentConfig?.enabled === true ? dependencies.envAgentConfig : undefined;
 
   const result = submitBatchJob(parsed.value.items, {
-    agentConfig,
-    projectStore: dependencies.proposalProjectStore,
+    ...(agentConfig === undefined ? {} : { agentConfig }),
+    ...(dependencies.proposalProjectStore === undefined
+      ? {}
+      : { projectStore: dependencies.proposalProjectStore }),
   });
 
   return jsonResponse(201, {
@@ -4374,11 +4389,7 @@ function batchJobStatusResponse(jobId: string): ApiRouteResponse {
   const job = getJobStatus(jobId);
   if (job === undefined) {
     // Check persisted results.
-    return failureResponse(
-      404,
-      "batch_job_not_found",
-      `Batch job not found: ${jobId}.`,
-    );
+    return failureResponse(404, "batch_job_not_found", `Batch job not found: ${jobId}.`);
   }
 
   const completed = job.items.filter((i) => i.status === "completed").length;
@@ -4417,15 +4428,11 @@ async function batchJobResultsResponse(jobId: string): Promise<ApiRouteResponse>
   // Check in-memory first, then persisted results.
   let job = getJobStatus(jobId);
   if (job === undefined) {
-    job = await loadJobResult(jobId);
+    job = (await loadJobResult(jobId)) ?? undefined;
   }
 
   if (job === undefined) {
-    return failureResponse(
-      404,
-      "batch_job_not_found",
-      `Batch job not found: ${jobId}.`,
-    );
+    return failureResponse(404, "batch_job_not_found", `Batch job not found: ${jobId}.`);
   }
 
   const completed = job.items.filter((i) => i.status === "completed").length;
@@ -4459,11 +4466,7 @@ function batchCancelResponse(jobId: string): ApiRouteResponse {
   if (!cancelled) {
     const job = getJobStatus(jobId);
     if (job === undefined) {
-      return failureResponse(
-        404,
-        "batch_job_not_found",
-        `Batch job not found: ${jobId}.`,
-      );
+      return failureResponse(404, "batch_job_not_found", `Batch job not found: ${jobId}.`);
     }
     return failureResponse(
       409,

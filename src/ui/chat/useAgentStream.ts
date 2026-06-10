@@ -14,6 +14,7 @@ export interface ToolActivityItem {
 }
 
 export interface ThinkingBlock {
+  readonly id: string;
   readonly content: string;
   readonly thinkingLevel?: string;
 }
@@ -81,6 +82,24 @@ function makeId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
+/**
+ * Releases the shared abort controller and status owned by a finished run,
+ * but only if that run still owns them. When a run is stopped and a newer run
+ * has already claimed `abortRef`, the stale run's cleanup must not clobber
+ * the new run's controller (which would kill its Stop button) or reset the
+ * status (which would allow an overlapping send).
+ */
+export function releaseRunOwnership(
+  abortRef: { current: AbortController | null },
+  controller: AbortController,
+  setStatus: (status: AgentStatus) => void,
+): boolean {
+  if (abortRef.current !== controller) return false;
+  abortRef.current = null;
+  setStatus("idle");
+  return true;
+}
+
 export function useAgentStream(): AgentStreamApi {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<AgentStatus>("idle");
@@ -95,7 +114,11 @@ export function useAgentStream(): AgentStreamApi {
     setMessages((prev) =>
       prev.map((message) => {
         if (message.id !== id) return message;
-        const next = { ...message, tools: [...message.tools], thinkingBlocks: [...message.thinkingBlocks] };
+        const next = {
+          ...message,
+          tools: [...message.tools],
+          thinkingBlocks: [...message.thinkingBlocks],
+        };
         update(next);
         return next;
       }),
@@ -111,13 +134,23 @@ export function useAgentStream(): AgentStreamApi {
       setMessages((prev) => [
         ...prev,
         { id: makeId(), role: "user", text, thinkingBlocks: [], tools: [] },
-        { id: assistantId, role: "assistant", text: "", thinkingBlocks: [], tools: [], streaming: true },
+        {
+          id: assistantId,
+          role: "assistant",
+          text: "",
+          thinkingBlocks: [],
+          tools: [],
+          streaming: true,
+        },
       ]);
       setStatus("thinking");
 
       const controller = new AbortController();
       abortRef.current = controller;
       const fromLatestProject = newChatFromLatestProjectRef.current;
+      // Consume the flag immediately so a stale run's cleanup can never
+      // clobber a flag set for a newer run.
+      newChatFromLatestProjectRef.current = false;
       const requestOptions: AgentSendOptions = {
         ...(options ?? {}),
         ...(fromLatestProject ? { newChatFromLatestProject: true } : {}),
@@ -151,7 +184,6 @@ export function useAgentStream(): AgentStreamApi {
               occurredAt: new Date().toISOString(),
             });
           }
-          setStatus("idle");
           return;
         }
 
@@ -182,9 +214,7 @@ export function useAgentStream(): AgentStreamApi {
         patchAssistant(assistantId, (m) => {
           m.streaming = false;
         });
-        newChatFromLatestProjectRef.current = false;
-        setStatus("idle");
-        abortRef.current = null;
+        releaseRunOwnership(abortRef, controller, setStatus);
       }
     },
     [patchAssistant, status],
@@ -262,6 +292,7 @@ function applyFrame(frame: AgentStreamFrame, assistantId: string, ctx: ApplyCont
     case "thinking":
       ctx.patchAssistant(assistantId, (m) => {
         m.thinkingBlocks.push({
+          id: makeId(),
           content: frame.content,
           ...(frame.thinkingLevel === undefined ? {} : { thinkingLevel: frame.thinkingLevel }),
         });

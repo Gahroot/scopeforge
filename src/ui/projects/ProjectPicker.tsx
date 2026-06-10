@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FolderOpen, Loader2, Plus, RefreshCw } from "lucide-react";
+import { FolderOpen, Grid3X3, Loader2, Plus, RefreshCw } from "lucide-react";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
@@ -16,6 +16,7 @@ export interface ProjectPickerProps {
   readonly onCreate: (title: string) => void;
   readonly onOpen: (projectId: string) => void;
   readonly onRefresh: () => void;
+  readonly onOpenTemplateGallery: () => void;
 }
 
 export function ProjectPicker({
@@ -28,72 +29,73 @@ export function ProjectPicker({
   onCreate,
   onOpen,
   onRefresh,
+  onOpenTemplateGallery,
 }: ProjectPickerProps): JSX.Element {
   const [title, setTitle] = useState("");
   const trimmedTitle = title.trim();
   const createDisabled = creating || trimmedTitle.length === 0;
 
   return (
-    <main className="flex min-h-0 flex-1 items-start justify-center overflow-auto bg-muted/30 p-6">
-      <div className="grid w-full max-w-5xl gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <Card>
-          <CardHeader>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <CardTitle className="text-base">Open a proposal project</CardTitle>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Pick a persisted project workspace before chatting, previewing, importing brands,
-                  or exporting.
-                </p>
-              </div>
-              <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
-                {loading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-4 w-4" />
-                )}
-                Refresh
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {error !== null && (
-              <p className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                {error}
+    <>
+      <Card>
+        <CardHeader>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-base">Open a proposal project</CardTitle>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Pick a persisted project workspace before chatting, previewing, importing brands, or
+                exporting.
               </p>
-            )}
-            {loading ? (
-              <p className="text-sm text-muted-foreground">Loading proposal projects…</p>
-            ) : projects.length === 0 ? (
-              <div className="rounded-lg border border-dashed p-8 text-center">
-                <p className="text-sm font-medium">No proposal projects yet.</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Create one to start a durable copilot workspace.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {projects.map((project) => (
-                  <ProjectListItem
-                    key={project.projectId}
-                    project={project}
-                    opening={openingProjectId === project.projectId}
-                    onOpen={onOpen}
-                  />
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Create project</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Starts with a safe draft that the copilot can refine inside versioned project storage.
+            </div>
+            <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
+              {loading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              Refresh
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {error !== null && (
+            <p className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+              {error}
             </p>
-          </CardHeader>
-          <CardContent>
+          )}
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Loading proposal projects…</p>
+          ) : projects.length === 0 ? (
+            <div className="rounded-lg border border-dashed p-8 text-center">
+              <p className="text-sm font-medium">No proposal projects yet.</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Create one to start a durable copilot workspace.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {projects.map((project) => (
+                <ProjectListItem
+                  key={project.projectId}
+                  project={project}
+                  opening={openingProjectId === project.projectId}
+                  onOpen={onOpen}
+                />
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Create project</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Starts with a safe draft that the copilot can refine inside versioned project storage.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
             <form
               className="space-y-3"
               onSubmit={(event) => {
@@ -122,13 +124,32 @@ export function ProjectPicker({
                 ) : (
                   <Plus className="h-4 w-4" />
                 )}
-                Create and open
+                Start from Scratch
               </Button>
             </form>
-          </CardContent>
-        </Card>
-      </div>
-    </main>
+
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-card px-2 text-muted-foreground">or</span>
+              </div>
+            </div>
+
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={onOpenTemplateGallery}
+            >
+              <Grid3X3 className="h-4 w-4" />
+              Start from Template
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </>
   );
 }
 

@@ -28,19 +28,26 @@ export type PendingAnthropicOAuth = {
 
 type TokenResponse = {
   access_token: string;
-  refresh_token: string;
+  refresh_token?: string;
   expires_in: number;
 };
 
-function toCredentials(data: TokenResponse): OAuthCredentials {
+function toCredentials(data: TokenResponse, previousRefreshToken?: string): OAuthCredentials {
+  const refreshToken = data.refresh_token ?? previousRefreshToken;
+  if (refreshToken === undefined || refreshToken.length === 0) {
+    throw new Error("Anthropic token response did not include a refresh_token.");
+  }
   return {
     accessToken: data.access_token,
-    refreshToken: data.refresh_token,
+    refreshToken,
     expiresAt: Date.now() + data.expires_in * 1000 - 5 * 60 * 1000,
   };
 }
 
-async function postTokenRequest(body: Record<string, string>, label: string): Promise<TokenResponse> {
+async function postTokenRequest(
+  body: Record<string, string>,
+  label: string,
+): Promise<TokenResponse> {
   const encoded = JSON.stringify(body);
   const headers = {
     "Content-Type": "application/json",
@@ -130,5 +137,5 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
     },
     "token refresh",
   );
-  return toCredentials(data);
+  return toCredentials(data, refreshToken);
 }

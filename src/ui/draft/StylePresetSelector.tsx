@@ -1,13 +1,7 @@
 import { useCallback, useState } from "react";
 import { Palette, Upload, X } from "lucide-react";
 import { Button } from "../components/ui/button.js";
-import {
-  BUILT_IN_STYLE_PRESET_IDS,
-  getBuiltInStylePresets,
-  type BuiltInStylePresetId,
-} from "../../proposal/presets.js";
-import type { StylePreset } from "../../proposal/stylePreset.js";
-import { cn } from "../lib/utils.js";
+import { BUILT_IN_STYLE_PRESET_IDS, getBuiltInStylePresets } from "../../proposal/presets.js";
 
 export interface StylePresetSelectorProps {
   readonly selectedPresetId?: string | undefined;
@@ -16,11 +10,6 @@ export interface StylePresetSelectorProps {
   readonly onUploadReference?: ((file: File) => void) | undefined;
   readonly extracting?: boolean | undefined;
 }
-
-const BUILTIN_LABELS: Record<BuiltInStylePresetId, string> = {
-  triten: "Triten Value Proposal",
-  generic: "Clean Professional",
-};
 
 export function StylePresetSelector({
   selectedPresetId,

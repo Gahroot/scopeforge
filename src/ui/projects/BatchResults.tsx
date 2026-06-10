@@ -11,11 +11,7 @@ import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
 import { Separator } from "../components/ui/separator.js";
-import {
-  fetchBatchJobResults,
-  type BatchJobResultItem,
-  type BatchJobResults,
-} from "../lib/api.js";
+import { fetchBatchJobResults, type BatchJobResultItem, type BatchJobResults } from "../lib/api.js";
 
 export interface BatchResultsProps {
   readonly jobId: string;
@@ -50,10 +46,8 @@ export function BatchResults({ jobId, onOpenProject, onBack }: BatchResultsProps
     return () => controller.abort();
   }, [jobId]);
 
-  const successfulItems =
-    results?.results.filter((item) => item.status === "completed") ?? [];
-  const failedItems =
-    results?.results.filter((item) => item.status === "failed") ?? [];
+  const successfulItems = results?.results.filter((item) => item.status === "completed") ?? [];
+  const failedItems = results?.results.filter((item) => item.status === "failed") ?? [];
 
   const handleOpenAll = useCallback((): void => {
     if (onOpenProject === undefined) return;
@@ -79,14 +73,10 @@ export function BatchResults({ jobId, onOpenProject, onBack }: BatchResultsProps
           {results !== null && (
             <div className="flex items-center gap-2">
               {successfulItems.length > 0 && (
-                <Badge variant="success">
-                  {successfulItems.length} succeeded
-                </Badge>
+                <Badge variant="success">{successfulItems.length} succeeded</Badge>
               )}
               {failedItems.length > 0 && (
-                <Badge variant="destructive">
-                  {failedItems.length} failed
-                </Badge>
+                <Badge variant="destructive">{failedItems.length} failed</Badge>
               )}
             </div>
           )}
@@ -106,62 +96,54 @@ export function BatchResults({ jobId, onOpenProject, onBack }: BatchResultsProps
           </p>
         )}
 
-        {!loading && results !== null && (
-          <>
-            {results.results.length === 0 ? (
-              <div className="rounded-lg border border-dashed p-8 text-center">
-                <p className="text-sm font-medium">No results found.</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  This batch job may not have completed yet.
-                </p>
-              </div>
-            ) : (
-              <>
-                {/* Successful proposals */}
-                {successfulItems.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="text-xs font-medium text-muted-foreground">
-                      Generated Proposals
-                    </p>
-                    {successfulItems.map((item) => (
-                      <ResultItemRow
-                        key={item.itemId}
-                        item={item}
-                        {...(onOpenProject !== undefined ? { onOpenProject } : {})}
-                      />
-                    ))}
-                  </div>
-                )}
+        {!loading &&
+          results !== null &&
+          (results.results.length === 0 ? (
+            <div className="rounded-lg border border-dashed p-8 text-center">
+              <p className="text-sm font-medium">No results found.</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                This batch job may not have completed yet.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Successful proposals */}
+              {successfulItems.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">Generated Proposals</p>
+                  {successfulItems.map((item) => (
+                    <ResultItemRow
+                      key={item.itemId}
+                      item={item}
+                      {...(onOpenProject !== undefined ? { onOpenProject } : {})}
+                    />
+                  ))}
+                </div>
+              )}
 
-                {successfulItems.length > 0 && failedItems.length > 0 && <Separator />}
+              {successfulItems.length > 0 && failedItems.length > 0 && <Separator />}
 
-                {/* Failed items */}
-                {failedItems.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                      <AlertTriangle className="h-3 w-3" />
-                      Failed Items
-                    </p>
-                    {failedItems.map((item) => (
-                      <FailedItemRow key={item.itemId} item={item} />
-                    ))}
-                  </div>
-                )}
+              {/* Failed items */}
+              {failedItems.length > 0 && (
+                <div className="space-y-2">
+                  <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <AlertTriangle className="h-3 w-3" />
+                    Failed Items
+                  </p>
+                  {failedItems.map((item) => (
+                    <FailedItemRow key={item.itemId} item={item} />
+                  ))}
+                </div>
+              )}
 
-                {successfulItems.length > 1 && onOpenProject !== undefined && (
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    onClick={handleOpenAll}
-                  >
-                    <FolderOpen className="h-4 w-4" />
-                    Open All
-                  </Button>
-                )}
-              </>
-            )}
-          </>
-        )}
+              {successfulItems.length > 1 && onOpenProject !== undefined && (
+                <Button variant="outline" className="w-full" onClick={handleOpenAll}>
+                  <FolderOpen className="h-4 w-4" />
+                  Open All
+                </Button>
+              )}
+            </>
+          ))}
       </CardContent>
     </Card>
   );
@@ -173,25 +155,20 @@ interface ResultItemRowProps {
 }
 
 function ResultItemRow({ item, onOpenProject }: ResultItemRowProps): JSX.Element {
+  const projectId = item.projectId;
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border bg-background p-3">
       <div className="flex min-w-0 items-center gap-2">
         <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" />
         <div className="min-w-0">
-          <p className="truncate text-sm font-medium">
-            {item.projectTitle ?? item.fileName}
-          </p>
+          <p className="truncate text-sm font-medium">{item.projectTitle ?? item.fileName}</p>
           {item.projectTitle !== undefined && item.projectTitle !== item.fileName && (
             <p className="truncate text-xs text-muted-foreground">{item.fileName}</p>
           )}
         </div>
       </div>
-      {item.projectId !== undefined && onOpenProject !== undefined && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onOpenProject(item.projectId!)}
-        >
+      {projectId !== undefined && onOpenProject !== undefined && (
+        <Button variant="outline" size="sm" onClick={() => onOpenProject(projectId)}>
           <ExternalLink className="h-3.5 w-3.5" />
           Open
         </Button>

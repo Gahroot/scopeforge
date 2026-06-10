@@ -15,10 +15,11 @@ npm install
 | `npm run dev` | Start the Vite dev server. |
 | `npm run app:dev` | Start the local Node app server with Vite mounted behind it. |
 | `npm run app:server` | Serve the built Vite UI from `dist/` with local API routes. |
-| `npm run build` | Type-check then produce the production build (`tsc && vite build`). |
+| `npm run build` | Produce the production build, then type-check and emit `dist/` (`vite build && tsc`). |
 | `npm run test` | Run the Vitest suite once. |
 | `npm run test:e2e:collab` | Run the collaborative proposal-project E2E workflow test. |
 | `npm run typecheck` | Type-check without emitting (`tsc --noEmit`). |
+| `npm run lint` | Lint with Biome. |
 | `npm run proposal` | Generate proposal PDF/HTML from intake JSON. |
 | `npm run proposal:sample` | Generate the Triten sample proposal into `out/`. |
 

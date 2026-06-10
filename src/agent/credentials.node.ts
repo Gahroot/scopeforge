@@ -67,6 +67,10 @@ export function getDefaultCredentialsFilePath(
 export class AgentCredentialsStore {
   private data: CredentialsFile = { settings: DEFAULT_STORED_AGENT_SETTINGS, credentials: {} };
   private loaded = false;
+  private readonly oauthRefreshInFlight = new Map<
+    AgentProvider,
+    Promise<StoredProviderCredentials | undefined>
+  >();
 
   constructor(private readonly filePath = getDefaultCredentialsFilePath()) {}
 
@@ -135,23 +139,14 @@ export class AgentCredentialsStore {
     const credentials = this.data.credentials[provider];
     if (credentials === undefined) return undefined;
     if (credentials.authKind !== "oauth") return credentials;
-    if (!canRefreshOAuthProvider(provider) || Date.now() < credentials.expiresAt - OAUTH_REFRESH_SKEW_MS) {
+    if (
+      !canRefreshOAuthProvider(provider) ||
+      Date.now() < credentials.expiresAt - OAUTH_REFRESH_SKEW_MS
+    ) {
       return credentials;
     }
 
-    try {
-      const refreshed = await refreshOAuthCredentials(provider, credentials.refreshToken);
-      this.data.credentials[provider] = { ...refreshed, authKind: "oauth" };
-      await this.save();
-      return this.data.credentials[provider];
-    } catch (error) {
-      if (isAuthFailure(error)) {
-        delete this.data.credentials[provider];
-        await this.save();
-        return undefined;
-      }
-      throw error;
-    }
+    return this.runOAuthRefresh(provider, credentials);
   }
 
   async refreshCredentials(provider: AgentProvider): Promise<ProviderCredentialSummary> {
@@ -161,16 +156,43 @@ export class AgentCredentialsStore {
       return this.summarizeProvider(provider);
     }
 
+    await this.runOAuthRefresh(provider, credentials);
+    return this.summarizeProvider(provider);
+  }
+
+  private runOAuthRefresh(
+    provider: AgentProvider,
+    credentials: StoredProviderCredentials,
+  ): Promise<StoredProviderCredentials | undefined> {
+    const pending = this.oauthRefreshInFlight.get(provider);
+    if (pending !== undefined) return pending;
+    const refresh = this.performOAuthRefresh(provider, credentials).finally(() => {
+      this.oauthRefreshInFlight.delete(provider);
+    });
+    this.oauthRefreshInFlight.set(provider, refresh);
+    return refresh;
+  }
+
+  private async performOAuthRefresh(
+    provider: AgentProvider,
+    credentials: StoredProviderCredentials,
+  ): Promise<StoredProviderCredentials | undefined> {
     try {
       const refreshed = await refreshOAuthCredentials(provider, credentials.refreshToken);
       this.data.credentials[provider] = { ...refreshed, authKind: "oauth" };
       await this.save();
-      return this.summarizeProvider(provider);
+      return this.data.credentials[provider];
     } catch (error) {
       if (isAuthFailure(error)) {
+        const current = this.data.credentials[provider];
+        if (current !== undefined && current.refreshToken !== credentials.refreshToken) {
+          // A concurrent flow (e.g. a fresh sign-in) stored newer credentials while
+          // this refresh was in flight; keep them instead of signing the user out.
+          return current;
+        }
         delete this.data.credentials[provider];
         await this.save();
-        return this.summarizeProvider(provider);
+        return undefined;
       }
       throw error;
     }

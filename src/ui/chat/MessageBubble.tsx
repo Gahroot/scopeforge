@@ -14,12 +14,13 @@ export function MessageBubble({ message }: MessageBubbleProps): JSX.Element {
   return (
     <div className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}>
       <div className={cn("flex max-w-[85%] flex-col gap-2", isUser ? "items-end" : "items-start")}>
-        {!isUser && message.thinkingBlocks.length > 0 &&
-          message.thinkingBlocks.map((block, index) => (
+        {!isUser &&
+          message.thinkingBlocks.length > 0 &&
+          message.thinkingBlocks.map((block) => (
             <ThinkingBlock
-              key={index}
+              key={block.id}
               content={block.content}
-              thinkingLevel={block.thinkingLevel}
+              {...(block.thinkingLevel === undefined ? {} : { thinkingLevel: block.thinkingLevel })}
             />
           ))}
         {!isUser && message.tools.length > 0 && <ToolActivity tools={message.tools} />}

@@ -1,12 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  CheckCircle2,
-  FileText,
-  Loader2,
-  UploadCloud,
-  X,
-  XCircle,
-} from "lucide-react";
+import { CheckCircle2, FileText, Loader2, UploadCloud, X, XCircle } from "lucide-react";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
@@ -58,16 +51,16 @@ export function BatchUploadPanel({ onJobCreated }: BatchUploadPanelProps): JSX.E
     itemCount > 0 ? Math.round(((completedCount + failedCount) / itemCount) * 100) : 0;
 
   const isActive =
-    activeJob !== null &&
-    (activeJob.status === "pending" || activeJob.status === "processing");
+    activeJob !== null && (activeJob.status === "pending" || activeJob.status === "processing");
 
   // Poll active job status
+  const activeJobId = activeJob?.jobId ?? null;
   useEffect(() => {
-    if (activeJob === null || !isActive) return;
+    if (activeJobId === null || !isActive) return;
 
     const controller = new AbortController();
     const poll = async (): Promise<void> => {
-      const result = await fetchBatchJobStatus(activeJob.jobId, controller.signal);
+      const result = await fetchBatchJobStatus(activeJobId, controller.signal);
       if (!controller.signal.aborted && result.ok) {
         setActiveJob(result.value);
       }
@@ -80,7 +73,7 @@ export function BatchUploadPanel({ onJobCreated }: BatchUploadPanelProps): JSX.E
       pollRef.current = null;
       controller.abort();
     };
-  }, [activeJob?.jobId, isActive]);
+  }, [activeJobId, isActive]);
 
   const addFiles = useCallback((incoming: FileList | readonly File[]): void => {
     setError(null);
@@ -97,7 +90,7 @@ export function BatchUploadPanel({ onJobCreated }: BatchUploadPanelProps): JSX.E
   }, []);
 
   const handleDrop = useCallback(
-    (event: React.DragEvent<HTMLDivElement>): void => {
+    (event: React.DragEvent<HTMLButtonElement>): void => {
       event.preventDefault();
       event.stopPropagation();
       setDragging(false);
@@ -108,13 +101,13 @@ export function BatchUploadPanel({ onJobCreated }: BatchUploadPanelProps): JSX.E
     [addFiles],
   );
 
-  const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>): void => {
+  const handleDragOver = useCallback((event: React.DragEvent<HTMLButtonElement>): void => {
     event.preventDefault();
     event.stopPropagation();
     setDragging(true);
   }, []);
 
-  const handleDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>): void => {
+  const handleDragLeave = useCallback((event: React.DragEvent<HTMLButtonElement>): void => {
     event.preventDefault();
     event.stopPropagation();
     setDragging(false);
@@ -161,9 +154,7 @@ export function BatchUploadPanel({ onJobCreated }: BatchUploadPanelProps): JSX.E
     try {
       const result = await cancelBatchJob(activeJob.jobId);
       if (result.ok) {
-        setActiveJob((current) =>
-          current === null ? null : { ...current, status: "cancelled" },
-        );
+        setActiveJob((current) => (current === null ? null : { ...current, status: "cancelled" }));
       } else {
         setError(result.error.message);
       }
@@ -213,33 +204,26 @@ export function BatchUploadPanel({ onJobCreated }: BatchUploadPanelProps): JSX.E
 
         {/* Drop zone */}
         {!isActive && (
-          <div
-            role="button"
-            tabIndex={0}
+          <button
+            type="button"
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onClick={() => fileInputRef.current?.click()}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                fileInputRef.current?.click();
-              }
-            }}
-            className={`flex cursor-pointer flex-col items-center gap-2 rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
+            className={`flex w-full cursor-pointer flex-col items-center gap-2 rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
               dragging
                 ? "border-primary bg-primary/5"
                 : "border-muted-foreground/25 hover:border-muted-foreground/50"
             }`}
           >
             <UploadCloud className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm font-medium">
+            <span className="text-sm font-medium">
               Drop intake documents here or click to browse
-            </p>
-            <p className="text-xs text-muted-foreground">
+            </span>
+            <span className="text-xs text-muted-foreground">
               Accepts text, markdown, JSON, CSV, and PDF files
-            </p>
-          </div>
+            </span>
+          </button>
         )}
 
         <input
@@ -267,7 +251,7 @@ export function BatchUploadPanel({ onJobCreated }: BatchUploadPanelProps): JSX.E
               <div className="max-h-48 space-y-1 overflow-y-auto">
                 {files.map((file, index) => (
                   <div
-                    key={`${file.name}-${file.size}-${index}`}
+                    key={`${file.name}:${file.size}`}
                     className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2.5 py-1.5"
                   >
                     <div className="flex min-w-0 items-center gap-2">
@@ -290,12 +274,12 @@ export function BatchUploadPanel({ onJobCreated }: BatchUploadPanelProps): JSX.E
                 ))}
               </div>
             </div>
-            <Button
-              className="w-full"
-              onClick={() => void handleSubmit()}
-              disabled={busy}
-            >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+            <Button className="w-full" onClick={() => void handleSubmit()} disabled={busy}>
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <UploadCloud className="h-4 w-4" />
+              )}
               Generate Proposals
             </Button>
           </>

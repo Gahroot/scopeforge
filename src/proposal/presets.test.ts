@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StylePreset } from "./stylePreset.js";
 import {
-  BUILT_IN_STYLE_PRESET_IDS,
   GENERIC_STYLE_PRESET,
   TRITEN_STYLE_PRESET,
   getBuiltInStylePresets,

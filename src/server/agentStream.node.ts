@@ -428,7 +428,7 @@ export interface AgentStreamHandlerOptions {
  * persists message history + draft on the session, and maps errors to clean frames.
  */
 export async function handleAgentMessages(
-  request: IncomingMessage,
+  _request: IncomingMessage,
   response: ServerResponse,
   body: unknown,
   options: AgentStreamHandlerOptions,
@@ -470,6 +470,20 @@ export async function handleAgentMessages(
     ...(parsed.value.author === undefined ? {} : { author: parsed.value.author }),
     ...(projectContext === undefined ? {} : { projectContext }),
   });
+  if (session.abort !== null) {
+    response.writeHead(409, { "Content-Type": "application/json; charset=utf-8" });
+    response.end(
+      JSON.stringify({
+        ok: false,
+        error: {
+          code: "session_busy",
+          message:
+            "An agent run is already in progress for this session. Wait for it to finish or stop it before sending another message.",
+        },
+      }),
+    );
+    return;
+  }
   if (projectContext !== undefined) {
     const shouldHydrateFromProject =
       parsed.value.newChatFromLatestProject === true ||
@@ -497,14 +511,18 @@ export async function handleAgentMessages(
 
   const abort = new AbortController();
   session.abort = abort;
-  request.on("aborted", () => abort.abort());
-  request.on("close", () => abort.abort());
+  // request "aborted"/"close" never fire after the JSON body has been fully
+  // consumed on modern Node; the response "close" event is the reliable signal
+  // that the client disconnected mid-stream.
+  response.on("close", () => {
+    if (!response.writableEnded) abort.abort();
+  });
 
   response.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive",
-    "X-Accent-Buffering": "no",
+    "X-Accel-Buffering": "no",
   });
 
   write(response, {
@@ -537,7 +555,7 @@ export async function handleAgentMessages(
     logError("scopeforge.agent.request_failed", error, { sessionId: session.id });
     write(response, errorFrame(error));
   } finally {
-    session.abort = null;
+    if (session.abort === abort) session.abort = null;
     response.end();
   }
 }

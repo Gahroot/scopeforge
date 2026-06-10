@@ -143,13 +143,23 @@ interface HandleCallbackRequestInput {
 async function handleCallbackRequest(input: HandleCallbackRequestInput): Promise<void> {
   const requestUrl = new URL(input.request.url ?? "/", REDIRECT_URI);
   if (requestUrl.pathname !== "/auth/callback") {
-    sendCallbackHtml(input.response, 404, "Not found", "This callback server only handles OpenAI sign-in.");
+    sendCallbackHtml(
+      input.response,
+      404,
+      "Not found",
+      "This callback server only handles OpenAI sign-in.",
+    );
     return;
   }
 
   const state = requestUrl.searchParams.get("state");
   if (state !== input.expectedState) {
-    sendCallbackHtml(input.response, 400, "State mismatch", "OpenAI sign-in state did not match. Try again from ScopeForge settings.");
+    sendCallbackHtml(
+      input.response,
+      400,
+      "State mismatch",
+      "OpenAI sign-in state did not match. Try again from ScopeForge settings.",
+    );
     return;
   }
 
@@ -163,7 +173,12 @@ async function handleCallbackRequest(input: HandleCallbackRequestInput): Promise
 
   const code = requestUrl.searchParams.get("code");
   if (code === null || code.length === 0) {
-    sendCallbackHtml(input.response, 400, "Missing code", "OpenAI did not return an authorization code. Try signing in again.");
+    sendCallbackHtml(
+      input.response,
+      400,
+      "Missing code",
+      "OpenAI did not return an authorization code. Try signing in again.",
+    );
     input.server.close();
     return;
   }
@@ -200,7 +215,7 @@ function sendCallbackHtml(
     [
       "<!doctype html>",
       "<html>",
-      "<head><meta charset=\"utf-8\"><title>",
+      '<head><meta charset="utf-8"><title>',
       escapeHtml(title),
       "</title></head>",
       '<body style="font-family:system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;text-align:center;padding:80px 24px;color:#111827;">',
@@ -231,7 +246,10 @@ export async function completeOpenAIOAuth(input: {
     redirect_uri: REDIRECT_URI,
     code_verifier: input.verifier,
   });
-  return tokenResponseToCredentials(token, "OpenAI sign-in succeeded but the returned token does not carry a ChatGPT account id.");
+  return tokenResponseToCredentials(
+    token,
+    "OpenAI sign-in succeeded but the returned token does not carry a ChatGPT account id.",
+  );
 }
 
 export async function refreshOpenAIToken(refreshToken: string): Promise<OpenAIOAuthCredentials> {
@@ -243,12 +261,16 @@ export async function refreshOpenAIToken(refreshToken: string): Promise<OpenAIOA
     },
     true,
   );
-  return tokenResponseToCredentials(token, "Refreshed OpenAI token is missing the ChatGPT account id claim.");
+  return tokenResponseToCredentials(
+    token,
+    "Refreshed OpenAI token is missing the ChatGPT account id claim.",
+    refreshToken,
+  );
 }
 
 type TokenResponse = {
   readonly access_token: string;
-  readonly refresh_token: string;
+  readonly refresh_token?: string;
   readonly expires_in: number;
 };
 
@@ -269,19 +291,29 @@ async function postOpenAITokenRequest(
         `OpenAI refresh rejected (${response.status}): ${text || "invalid_grant"}`,
       );
     }
-    throw new Error(`OpenAI token ${refresh ? "refresh" : "exchange"} failed (${response.status}): ${text}`);
+    throw new Error(
+      `OpenAI token ${refresh ? "refresh" : "exchange"} failed (${response.status}): ${text}`,
+    );
   }
 
   return (await response.json()) as TokenResponse;
 }
 
-function tokenResponseToCredentials(token: TokenResponse, missingAccountMessage: string): OpenAIOAuthCredentials {
+function tokenResponseToCredentials(
+  token: TokenResponse,
+  missingAccountMessage: string,
+  previousRefreshToken?: string,
+): OpenAIOAuthCredentials {
   const accountId = getOpenAIAccountId(token.access_token);
   if (accountId === null) throw new OpenAIRefreshTokenInvalidError(missingAccountMessage);
+  const refreshToken = token.refresh_token ?? previousRefreshToken;
+  if (refreshToken === undefined || refreshToken.length === 0) {
+    throw new Error("OpenAI token response did not include a refresh_token.");
+  }
   const email = getOpenAIEmail(token.access_token);
   return {
     accessToken: token.access_token,
-    refreshToken: token.refresh_token,
+    refreshToken,
     expiresAt: Date.now() + token.expires_in * 1000,
     accountId,
     ...(email === undefined ? {} : { email }),

@@ -26,13 +26,15 @@ describe("ProjectPicker", () => {
         onCreate: vi.fn(),
         onOpen: vi.fn(),
         onRefresh: vi.fn(),
+        onOpenTemplateGallery: vi.fn(),
       }),
     );
 
     expect(html).toContain("Open a proposal project");
     expect(html).toContain("Acme AI pilot");
     expect(html).toContain("Version 2");
-    expect(html).toContain("Create and open");
+    expect(html).toContain("Start from Scratch");
+    expect(html).toContain("Start from Template");
     expect(html).toContain("Author: Riley Chen");
   });
 });

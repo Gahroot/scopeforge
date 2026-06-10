@@ -19,6 +19,7 @@ import {
   fetchProposalProjectUpdates,
   ingestSourceMaterial,
   fetchBatchJobStatus,
+  useTemplate as applyTemplateApi,
   type BatchJobStatusResponse,
   type CreateProposalProjectResponse,
   type HealthResponse,
@@ -33,6 +34,7 @@ import { BatchResults } from "./projects/BatchResults.js";
 import { BatchUploadPanel } from "./projects/BatchUploadPanel.js";
 import { CollaborationStatus } from "./projects/CollaborationStatus.js";
 import { ProjectPicker } from "./projects/ProjectPicker.js";
+import { TemplateGallery } from "./projects/TemplateGallery.js";
 import type { ProposalProject } from "../project/types.js";
 import type { ProposalBrand } from "../proposal/types.js";
 
@@ -60,6 +62,7 @@ export function App(): JSX.Element {
   const [displayName, setDisplayName] = useState("");
   const [stylePresetId, setStylePresetId] = useState<string | undefined>(undefined);
   const [extractingStyle, setExtractingStyle] = useState(false);
+  const [templateGalleryOpen, setTemplateGalleryOpen] = useState(false);
   const lastAppliedSnapshotRef = useRef<string | null>(null);
   const agent = useAgentStream();
   const collaboratorDisplayName = displayName.trim();
@@ -154,6 +157,33 @@ export function App(): JSX.Element {
     [agent.reset, applyProjectState, authorDisplayName],
   );
 
+  const handleUseTemplate = useCallback(
+    async (templateId: string): Promise<void> => {
+      setCreatingProject(true);
+      setProjectError(null);
+      try {
+        const result = await applyTemplateApi(templateId);
+        if (!result.ok) {
+          setProjectError(result.error.message);
+          return;
+        }
+        applyProjectState({
+          ok: true,
+          project: result.value.project,
+          currentVersion: result.value.currentVersion,
+          sourceOfTruth: result.value.sourceOfTruth,
+        } satisfies ProposalProjectStateResponse);
+        setTemplateGalleryOpen(false);
+        agent.reset();
+      } catch (error) {
+        setProjectError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setCreatingProject(false);
+      }
+    },
+    [agent.reset, applyProjectState],
+  );
+
   const refreshHealth = useCallback(async (): Promise<void> => {
     const result = await fetchHealth();
     if (result.ok) {
@@ -188,32 +218,39 @@ export function App(): JSX.Element {
     setProjectConflict(conflict);
   }, []);
 
-  const handleStylePresetUpload = useCallback(async (file: File): Promise<void> => {
-    setExtractingStyle(true);
-    try {
-      const result = await ingestSourceMaterial({
-        sourceKind: "pdf",
-        file: {
-          name: file.name,
-          ...(file.type.length === 0 ? {} : { mediaType: file.type }),
-          base64: await fileToBase64(file),
-        },
-      });
-      if (!result.ok) return;
-      const { extractStyleFromText } = await import("../proposal/extractStyle.js");
-      const preset = extractStyleFromText(result.value.document.text, {
-        presetName: file.name.replace(/\.pdf$/i, ""),
-        sourcePath: file.name,
-      });
-      agent.send(`I uploaded a reference PDF (\"${file.name}\") for style matching. ` +
-        `Extracted ${preset.sections.length} sections with ${preset.tone.formality} tone. ` +
-        `Please apply this style to the current proposal draft.`);
-    } catch (error) {
-      agent.send(`Style extraction failed: ${error instanceof Error ? error.message : String(error)}. Please try again or select a built-in style preset.`);
-    } finally {
-      setExtractingStyle(false);
-    }
-  }, [agent]);
+  const handleStylePresetUpload = useCallback(
+    async (file: File): Promise<void> => {
+      setExtractingStyle(true);
+      try {
+        const result = await ingestSourceMaterial({
+          sourceKind: "pdf",
+          file: {
+            name: file.name,
+            ...(file.type.length === 0 ? {} : { mediaType: file.type }),
+            base64: await fileToBase64(file),
+          },
+        });
+        if (!result.ok) return;
+        const { extractStyleFromText } = await import("../proposal/extractStyle.js");
+        const preset = extractStyleFromText(result.value.document.text, {
+          presetName: file.name.replace(/\.pdf$/i, ""),
+          sourcePath: file.name,
+        });
+        agent.send(
+          `I uploaded a reference PDF ("${file.name}") for style matching. ` +
+            `Extracted ${preset.sections.length} sections with ${preset.tone.formality} tone. ` +
+            `Please apply this style to the current proposal draft.`,
+        );
+      } catch (error) {
+        agent.send(
+          `Style extraction failed: ${error instanceof Error ? error.message : String(error)}. Please try again or select a built-in style preset.`,
+        );
+      } finally {
+        setExtractingStyle(false);
+      }
+    },
+    [agent],
+  );
 
   const refreshLatestProject = useCallback(async (): Promise<void> => {
     if (selectedProjectId === null) return;
@@ -461,6 +498,7 @@ export function App(): JSX.Element {
                     onCreate={(title) => void createProject(title)}
                     onOpen={(projectId) => void openProject(projectId)}
                     onRefresh={() => void refreshProjects()}
+                    onOpenTemplateGallery={() => setTemplateGalleryOpen(true)}
                   />
                 )}
                 {batchJobs.length > 0 && viewingBatchJobId === null && (
@@ -488,6 +526,12 @@ export function App(): JSX.Element {
           </div>
         )}
       </div>
+      <TemplateGallery
+        open={templateGalleryOpen}
+        currentDraft={projectState?.sourceOfTruth?.draft ?? null}
+        onClose={() => setTemplateGalleryOpen(false)}
+        onUseTemplate={(templateId) => void handleUseTemplate(templateId)}
+      />
     </TooltipProvider>
   );
 }
